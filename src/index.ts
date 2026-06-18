@@ -12,28 +12,36 @@ function runLedgerVerificationPipeline(): void {
     const storageEngine = new MemoryStorage();
     const ledger = new MerkleMountainRange(storageEngine);
 
-    // Append mock high-integrity operational logs to the structure
+    // Append high-integrity operational logs to the structure
     ledger.appendLeaf('TX_LOG_ENTRY_001: SYSTEM_INIT');
     ledger.appendLeaf('TX_LOG_ENTRY_002: KEY_ROTATION_ROT_01');
     ledger.appendLeaf('TX_LOG_ENTRY_003: ACCESS_GRANTED_ZONE_ALPHA');
-    ledger.appendLeaf('TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE');
+    
+    // Track the index of the specific leaf we wish to audit
+    const targetLeafIndex = ledger.appendLeaf('TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE');
+    const leafValue = 'TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE';
 
     const masterRootHash = ledger.getMasterRoot();
     console.log(`Current Authoritative Master Root: ${masterRootHash}`);
 
-    // Simulate an inclusion proof scenario for TX_LOG_ENTRY_004
-    const leafValue = 'TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE';
+    console.log(`Generating authentic cryptographic inclusion proof for leaf index: ${targetLeafIndex}...`);
     
-    // In a production setup, these sibling indices are mapped mathematically.
-    // For this initial simulation scenario, we pass an empty tracking slice.
-    const mockedProofSiblings: string[] = []; 
-    
+    // Generate a valid, non-mocked inclusion proof token using the upgraded MMR engine
+    const inclusionProof = ledger.generateInclusionProof(targetLeafIndex, leafValue);
+
+    console.log(`Proof generated successfully. Number of sibling hashes collected: ${inclusionProof.siblings.length}`);
+    inclusionProof.siblings.forEach((hash, idx) => {
+        console.log(`  Sibling [${idx}]: ${hash}`);
+    });
+
+    console.log('Passing proof package to the static MerkleProofEngine for structural verification...');
+
     // Validate integrity parameters using the static proof verification engine
     const isValid = MerkleProofEngine.verifyInclusion(
         masterRootHash,
-        leafValue,
-        0, // Base verification offset relative to local peak coordinates
-        mockedProofSiblings
+        inclusionProof.leafValue,
+        inclusionProof.leafIndex,
+        inclusionProof.siblings
     );
 
     console.log(`Execution Complete. Cryptographic inclusion match state: ${isValid}`);
