@@ -1,5 +1,7 @@
 import { createHash } from 'crypto';
 import { MemoryStorage } from '../storage/memoryStorage.js';
+import { MathUtilities } from './math.js';
+import { InclusionProof } from '../types/index.js';
 
 /**
  * Tracks the metadata of an active peak within the mountain range topology.
@@ -21,6 +23,8 @@ export class MerkleMountainRange {
     private readonly storage: MemoryStorage;
     private peaks: PeakMarker[] = [];
     private nextStorageIndex: number = 0;
+    private readonly leafToStorageMap: Map<number, number> = new Map();
+    private leafCount: number = 0;
 
     /**
      * Instantiates the Merkle Mountain Range with an underlying persistence layer.
@@ -34,35 +38,34 @@ export class MerkleMountainRange {
      * Appends a new unhashed payload entry as a leaf node to the end of the ledger.
      * Triggers cascading parent merges if the preceding peaks have matching heights.
      * @param value The raw string transaction or event data log.
-     * @returns The storage index assigned to the newly appended leaf.
+     * @returns The chronological leaf index assigned to the newly appended leaf.
      */
     public appendLeaf(value: string): number {
-        let currentHash = this.calculateHash(value);
-        let currentHeight = 0;
-        const initialLeafIndex = this.nextStorageIndex;
+        const currentHash = this.calculateHash(value);
+        const currentHeight = 0;
+        const assignedLeafIndex = this.leafCount;
+        const assignedStorageIndex = this.nextStorageIndex;
 
-        // Persist the initial leaf node directly to the storage layout
-        this.storage.writeNode(this.nextStorageIndex, currentHash);
+        this.leafToStorageMap.set(assignedLeafIndex, assignedStorageIndex);
+        this.storage.writeNode(assignedStorageIndex, currentHash);
         
         let newPeak: PeakMarker = {
-            storageIndex: this.nextStorageIndex,
+            storageIndex: assignedStorageIndex,
             height: currentHeight,
             hash: currentHash
         };
         this.nextStorageIndex++;
+        this.leafCount++;
 
         // Cascading merge loop: combine left and right peaks of equal height
         while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
             const leftPeak = this.peaks.pop()!;
-            
-            // Calculate parent node values based on binary concatenations
             const parentHash = this.calculateHash(leftPeak.hash + newPeak.hash);
             const parentIndex = this.nextStorageIndex;
             
             this.storage.writeNode(parentIndex, parentHash);
             this.nextStorageIndex++;
 
-            // Move up one level in height and continue verification checks
             newPeak = {
                 storageIndex: parentIndex,
                 height: leftPeak.height + 1,
@@ -71,7 +74,52 @@ export class MerkleMountainRange {
         }
 
         this.peaks.push(newPeak);
-        return initialLeafIndex;
+        return assignedLeafIndex;
+    }
+
+    /**
+     * Generates a verifiable cryptographic proof capsule demonstrating leaf inclusion.
+     * @param leafIndex The chronological leaf position identifier to verify.
+     * @param rawValue The original unhashed string payload backing the leaf reference.
+     * @returns A complete InclusionProof token structure.
+     * @throws Error if the specified leaf index does not map to an allocated element.
+     */
+    public generateInclusionProof(leafIndex: number, rawValue: string): InclusionProof {
+        const initialStorageIndex = this.leafToStorageMap.get(leafIndex);
+        if (initialStorageIndex === undefined) {
+            throw new Error(`Inclusion proof execution error: Leaf index ${leafIndex} is out of bounds.`);
+        }
+
+        const siblingsCollection: string[] = [];
+        let currentStorageIndex = initialStorageIndex;
+        let currentHeight = MathUtilities.getNodeHeight(currentStorageIndex);
+
+        // Climb the tree path until reaching an isolated mountain peak
+        while (currentStorageIndex < this.nextStorageIndex) {
+            const siblingIndex = MathUtilities.getSiblingIndex(currentStorageIndex, currentHeight);
+            const siblingHash = this.storage.readNode(siblingIndex);
+            
+            if (!siblingHash) {
+                break; // Sibling is unallocated, indicating we hit a peak root boundary
+            }
+
+            siblingsCollection.push(siblingHash);
+            
+            // Determine parent index coordinate sequentially under post-order rules
+            if (siblingIndex > currentStorageIndex) {
+                currentStorageIndex = siblingIndex + 1;
+            } else {
+                currentStorageIndex = currentStorageIndex + 1;
+            }
+            currentHeight++;
+        }
+
+        return {
+            leafIndex,
+            leafValue: rawValue,
+            siblings: siblingsCollection,
+            peakHashes: this.getPeakHashes()
+        };
     }
 
     /**
@@ -84,12 +132,10 @@ export class MerkleMountainRange {
             return this.calculateHash('');
         }
 
-        // If a single perfect binary tree exists, its peak is the master root
         if (this.peaks.length === 1) {
             return this.peaks[0].hash;
         }
 
-        // Combine all distinct peak markers to bind the entire topology
         let dynamicRoot = this.peaks[this.peaks.length - 1].hash;
         for (let i = this.peaks.length - 2; i >= 0; i--) {
             dynamicRoot = this.calculateHash(this.peaks[i].hash + dynamicRoot);
@@ -103,7 +149,7 @@ export class MerkleMountainRange {
      * @returns An ordered array of hexadecimal hash strings.
      */
     public getPeakHashes(): string[] {
-        return this.peaks.map(p => p.hash);
+        return this.peaks.map((p: PeakMarker) => p.hash);
     }
 
     /**
