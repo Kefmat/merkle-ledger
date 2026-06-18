@@ -30,7 +30,7 @@ function runLedgerVerificationPipeline(): void {
     const inclusionProof = ledger.generateInclusionProof(targetLeafIndex, leafValue);
 
     console.log(`Proof generated successfully. Number of sibling hashes collected: ${inclusionProof.siblings.length}`);
-    inclusionProof.siblings.forEach((hash, idx) => {
+    inclusionProof.siblings.forEach((hash: string, idx: number) => {
         console.log(`  Sibling [${idx}]: ${hash}`);
     });
 
