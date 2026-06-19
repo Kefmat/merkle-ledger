@@ -113,10 +113,11 @@ export class LedgerServer {
                 const currentMasterRoot = this.ledger.getMasterRoot();
                 const activePeakHashes = this.ledger.getPeakHashes();
 
+                // Assign the local variable to the key value pairs explicitly to resolve compilation scopes
                 this.writeJsonResponse(res, 200, {
                     proof: consistencyProofPacket,
                     currentMasterRoot,
-                    currentPeakHashes
+                    currentPeakHashes: activePeakHashes
                 });
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Unknown consistency evaluation error.';
