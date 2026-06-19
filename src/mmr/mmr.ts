@@ -124,6 +124,7 @@ export class MerkleMountainRange {
 
     /**
      * Extracts the proof context tokens required to demonstrate structural consistency.
+     * Simulates historical operations to construct the precise baseline peaks configuration.
      * @param oldSize The total record volume defining the historical reference point.
      * @returns A populated ConsistencyProof capsule containing evaluation parameters.
      */
@@ -132,31 +133,38 @@ export class MerkleMountainRange {
             throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
         }
 
-        // Identify total structural node markers allocated when the old size threshold was crossed
-        let oldStorageCount = 0;
+        // Reconstruct what the peaks array looked like when leafCount matched oldSize
+        let virtualPeaks: Array<{ height: number; hash: string }> = [];
+        
         for (let i = 0; i < oldSize; i++) {
             const leafStorageIdx = this.leafToStorageMap.get(i);
-            if (leafStorageIdx !== undefined && leafStorageIdx > oldStorageCount) {
-                oldStorageCount = leafStorageIdx;
+            if (leafStorageIdx === undefined) {
+                continue;
             }
-        }
-        oldStorageCount += 1; // Translate maximum storage pointer position to absolute element count
-
-        const historicalPeakIndices = MathUtilities.getPeakIndices(oldStorageCount);
-        const resolvedProofHashes: string[] = [];
-
-        // Collect node digests matching historical peak positions from the storage pool
-        for (const targetIndex of historicalPeakIndices) {
-            const absoluteHash = this.storage.readNode(targetIndex);
-            if (absoluteHash) {
-                resolvedProofHashes.push(absoluteHash);
+            const initialHash = this.storage.readNode(leafStorageIdx);
+            if (!initialHash) {
+                continue;
             }
+
+            let newVirtualPeak = { height: 0, hash: initialHash };
+
+            while (virtualPeaks.length > 0 && virtualPeaks[virtualPeaks.length - 1].height === newVirtualPeak.height) {
+                const leftVirtualPeak = virtualPeaks.pop()!;
+                const parentHash = this.calculateHash(leftVirtualPeak.hash + newVirtualPeak.hash);
+                newVirtualPeak = {
+                    height: leftVirtualPeak.height + 1,
+                    hash: parentHash
+                };
+            }
+            virtualPeaks.push(newVirtualPeak);
         }
+
+        const historicalProofHashes = virtualPeaks.map(vp => vp.hash);
 
         return {
             oldSize,
             newSize: this.leafCount,
-            proofHashes: resolvedProofHashes
+            proofHashes: historicalProofHashes
         };
     }
 
