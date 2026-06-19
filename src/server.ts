@@ -25,7 +25,6 @@ export class LedgerServer {
      * @param callback Execution handler fired upon successful interface assignment.
      */
     public listen(port: number, callback: () => void): void {
-        // Force the underlying network listener to bind explicitly to IPv4 loopback
         this.server.listen(port, '127.0.0.1', callback);
     }
 
@@ -95,6 +94,32 @@ export class LedgerServer {
                 });
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Unknown execution error.';
+                this.writeJsonResponse(res, 404, { error: message });
+            }
+            return;
+        }
+
+        // Route: Compile Consistency Proof
+        if (path === '/consistency' && req.method === 'GET') {
+            const oldSizeParameter = urlInstance.searchParams.get('oldSize');
+            if (!oldSizeParameter) {
+                this.writeJsonResponse(res, 400, { error: 'Query parameter must specify a valid historical oldSize boundary.' });
+                return;
+            }
+
+            try {
+                const parsedOldSize = parseInt(oldSizeParameter, 10);
+                const consistencyProofPacket = this.ledger.generateConsistencyProof(parsedOldSize);
+                const currentMasterRoot = this.ledger.getMasterRoot();
+                const activePeakHashes = this.ledger.getPeakHashes();
+
+                this.writeJsonResponse(res, 200, {
+                    proof: consistencyProofPacket,
+                    currentMasterRoot,
+                    currentPeakHashes
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Unknown consistency evaluation error.';
                 this.writeJsonResponse(res, 404, { error: message });
             }
             return;
