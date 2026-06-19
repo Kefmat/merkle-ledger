@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { MemoryStorage } from '../storage/memoryStorage.js';
 import { MathUtilities } from './math.js';
-import { InclusionProof } from '../types/index.js';
+import { InclusionProof, ConsistencyProof } from '../types/index.js';
 
 /**
  * Tracks the metadata of an active peak within the mountain range topology.
@@ -123,6 +123,44 @@ export class MerkleMountainRange {
     }
 
     /**
+     * Extracts the proof context tokens required to demonstrate structural consistency.
+     * @param oldSize The total record volume defining the historical reference point.
+     * @returns A populated ConsistencyProof capsule containing evaluation parameters.
+     */
+    public generateConsistencyProof(oldSize: number): ConsistencyProof {
+        if (oldSize <= 0 || oldSize > this.leafCount) {
+            throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
+        }
+
+        // Identify total structural node markers allocated when the old size threshold was crossed
+        let oldStorageCount = 0;
+        for (let i = 0; i < oldSize; i++) {
+            const leafStorageIdx = this.leafToStorageMap.get(i);
+            if (leafStorageIdx !== undefined && leafStorageIdx > oldStorageCount) {
+                oldStorageCount = leafStorageIdx;
+            }
+        }
+        oldStorageCount += 1; // Translate maximum storage pointer position to absolute element count
+
+        const historicalPeakIndices = MathUtilities.getPeakIndices(oldStorageCount);
+        const resolvedProofHashes: string[] = [];
+
+        // Collect node digests matching historical peak positions from the storage pool
+        for (const targetIndex of historicalPeakIndices) {
+            const absoluteHash = this.storage.readNode(targetIndex);
+            if (absoluteHash) {
+                resolvedProofHashes.push(absoluteHash);
+            }
+        }
+
+        return {
+            oldSize,
+            newSize: this.leafCount,
+            proofHashes: resolvedProofHashes
+        };
+    }
+
+    /**
      * Calculates the master root hash by aggregating all active mountain peaks.
      * If multiple peaks exist, they are combined from right to left to produce a single fingerprint.
      * @returns A 64-character hexadecimal string representing the overall state commitment.
@@ -150,6 +188,14 @@ export class MerkleMountainRange {
      */
     public getPeakHashes(): string[] {
         return this.peaks.map((p: PeakMarker) => p.hash);
+    }
+
+    /**
+     * Returns the total count of appended leaf nodes currently managed by the range.
+     * @returns The total number of leaves.
+     */
+    public getLeafCount(): number {
+        return this.leafCount;
     }
 
     /**
