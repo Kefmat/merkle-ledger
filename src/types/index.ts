@@ -22,3 +22,16 @@ export interface InclusionProof {
     /** The root hashes of the isolated perfect binary trees currently forming the mountain peaks. */
     peakHashes: string[];
 }
+
+/**
+ * Encapsulates the cryptographic proof tokens required to demonstrate that an updated ledger state
+ * is a pure, append-only continuation of a previously verified historical snapshot size.
+ */
+export interface ConsistencyProof {
+    /** The total count of data records present in the historical baseline snapshot. */
+    oldSize: number;
+    /** The total count of data records present in the new extended ledger state. */
+    newSize: number;
+    /** The minimal set of historical peak hashes necessary to reconstruct the baseline root commitment. */
+    proofHashes: string[];
+}
