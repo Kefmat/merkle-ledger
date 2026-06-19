@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { MemoryStorage } from './storage/memoryStorage.js';
 import { MerkleMountainRange } from './mmr/mmr.js';
+import { MerkleProofEngine } from './proofs/engine.js';
 
 /**
  * Orchestrates a native non-blocking HTTP networking cluster to process operational 
@@ -113,7 +114,6 @@ export class LedgerServer {
                 const currentMasterRoot = this.ledger.getMasterRoot();
                 const activePeakHashes = this.ledger.getPeakHashes();
 
-                // Assign the local variable to the key value pairs explicitly to resolve compilation scopes
                 this.writeJsonResponse(res, 200, {
                     proof: consistencyProofPacket,
                     currentMasterRoot,
@@ -123,6 +123,67 @@ export class LedgerServer {
                 const message = error instanceof Error ? error.message : 'Unknown consistency evaluation error.';
                 this.writeJsonResponse(res, 404, { error: message });
             }
+            return;
+        }
+
+        // Route: Verify Structural Proofs (Inclusion or Consistency)
+        if (path === '/verify' && req.method === 'POST') {
+            let bufferAccumulator = '';
+            req.on('data', (chunk: Buffer) => {
+                bufferAccumulator += chunk.toString();
+            });
+
+            req.on('end', () => {
+                try {
+                    const payload = JSON.parse(bufferAccumulator) as {
+                        type?: 'inclusion' | 'consistency';
+                        rootHash?: string;
+                        leafValue?: string;
+                        leafIndex?: number;
+                        siblings?: string[];
+                        peakHashes?: string[];
+                        oldRootHash?: string;
+                        newRootHash?: string;
+                        proofHashes?: string[];
+                        currentPeakHashes?: string[];
+                    };
+
+                    if (payload.type === 'inclusion') {
+                        if (!payload.rootHash || !payload.leafValue || payload.leafIndex === undefined || !payload.siblings) {
+                            this.writeJsonResponse(res, 400, { error: 'Missing properties for inclusion verification.' });
+                            return;
+                        }
+                        const isValid = MerkleProofEngine.verifyInclusion(
+                            payload.rootHash,
+                            payload.leafValue,
+                            payload.leafIndex,
+                            payload.siblings,
+                            payload.peakHashes ?? []
+                        );
+                        this.writeJsonResponse(res, 200, { valid: isValid });
+                        return;
+                    }
+
+                    if (payload.type === 'consistency') {
+                        if (!payload.oldRootHash || !payload.newRootHash || !payload.proofHashes || !payload.currentPeakHashes) {
+                            this.writeJsonResponse(res, 400, { error: 'Missing properties for consistency verification.' });
+                            return;
+                        }
+                        const isValid = MerkleProofEngine.verifyConsistency(
+                            payload.oldRootHash,
+                            payload.newRootHash,
+                            payload.proofHashes,
+                            payload.currentPeakHashes
+                        );
+                        this.writeJsonResponse(res, 200, { valid: isValid });
+                        return;
+                    }
+
+                    this.writeJsonResponse(res, 400, { error: 'Invalid or unallocated verification type context.' });
+                } catch {
+                    this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata.' });
+                }
+            });
             return;
         }
 
