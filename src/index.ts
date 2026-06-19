@@ -36,12 +36,13 @@ function runLedgerVerificationPipeline(): void {
 
     console.log('Passing proof package to the static MerkleProofEngine for structural verification...');
 
-    // Validate integrity parameters using the static proof verification engine
+    // Validate integrity parameters using the static proof verification engine passing peak markers
     const isValid = MerkleProofEngine.verifyInclusion(
         masterRootHash,
         inclusionProof.leafValue,
         inclusionProof.leafIndex,
-        inclusionProof.siblings
+        inclusionProof.siblings,
+        inclusionProof.peakHashes
     );
 
     console.log(`Execution Complete. Cryptographic inclusion match state: ${isValid}`);
