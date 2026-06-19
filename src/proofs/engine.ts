@@ -82,7 +82,7 @@ export class MerkleProofEngine {
             return false;
         }
 
-        // Reconstruct the old master root signature by folding historical peaks from right to left
+        // 1. Reconstruct the old master root signature by folding historical peaks from right to left
         let calculatedOldRoot = proofHashes[proofHashes.length - 1];
         for (let i = proofHashes.length - 2; i >= 0; i--) {
             calculatedOldRoot = this.cryptoHash(proofHashes[i] + calculatedOldRoot);
@@ -92,31 +92,7 @@ export class MerkleProofEngine {
             return false; // Historical proof hashes do not form the verified old master root
         }
 
-        // Verify that every historical peak component is cryptographically accounted for inside the current peaks
-        for (const oldPeak of proofHashes) {
-            let matchedInNewState = false;
-            
-            // Check if the old peak exists directly or maps to a left-hand child element of a current peak
-            for (const activePeak of currentPeakHashes) {
-                if (activePeak === oldPeak) {
-                    matchedInNewState = true;
-                    break;
-                }
-            }
-            
-            if (!matchedInNewState) {
-                // If an old peak is missing, it must have been combined into a larger parent node.
-                // For basic append-only validation, we verify that the current state master root folds cleanly.
-                let calculatedNewRoot = currentPeakHashes[currentPeakHashes.length - 1];
-                for (let i = currentPeakHashes.length - 2; i >= 0; i--) {
-                    calculatedNewRoot = this.cryptoHash(currentPeakHashes[i] + calculatedNewRoot);
-                }
-                
-                return calculatedNewRoot === newRootHash;
-            }
-        }
-
-        // Finalize by folding the current active state peaks to verify alignment with the target new root
+        // 2. Finalize by folding the current active state peaks to verify alignment with the target new root
         let finalizedNewRoot = currentPeakHashes[currentPeakHashes.length - 1];
         for (let i = currentPeakHashes.length - 2; i >= 0; i--) {
             finalizedNewRoot = this.cryptoHash(currentPeakHashes[i] + finalizedNewRoot);
