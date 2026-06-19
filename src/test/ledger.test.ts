@@ -88,4 +88,29 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
 
         assert.strictEqual(isVerifiedWithCorruptedPath, false);
     });
+
+    test('should correctly validate legitimate consistency proofs across size extensions', () => {
+        const storage = new MemoryStorage();
+        const ledger = new MerkleMountainRange(storage);
+
+        ledger.appendLeaf('TX_001');
+        ledger.appendLeaf('TX_002');
+        const baselineRoot = ledger.getMasterRoot(); // Capture baseline state at size 2
+
+        ledger.appendLeaf('TX_003');
+        ledger.appendLeaf('TX_004');
+        ledger.appendLeaf('TX_005');
+        const extendedRoot = ledger.getMasterRoot(); // Extended state at size 5
+
+        const consistencyProof = ledger.generateConsistencyProof(2);
+
+        const isValidExtension = MerkleProofEngine.verifyConsistency(
+            baselineRoot,
+            extendedRoot,
+            consistencyProof.proofHashes,
+            ledger.getPeakHashes()
+        );
+
+        assert.strictEqual(isValidExtension, true);
+    });
 });
