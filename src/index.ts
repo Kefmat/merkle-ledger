@@ -10,7 +10,8 @@ function bootMicroserviceInstance(): void {
     const persistentMemoryStore = new MemoryStorage();
     const runtimeHttpDaemon = new LedgerServer(persistentMemoryStore);
     
-    const targetNetworkPort = 8080;
+    // Pivot to 8081 to bypass local system socket contention issues
+    const targetNetworkPort = 8081;
 
     runtimeHttpDaemon.listen(targetNetworkPort, () => {
         console.log(`Secured auditing layer operational across network interfaces. Daemon running on port: ${targetNetworkPort}`);
