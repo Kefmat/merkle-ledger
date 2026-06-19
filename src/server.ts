@@ -25,7 +25,8 @@ export class LedgerServer {
      * @param callback Execution handler fired upon successful interface assignment.
      */
     public listen(port: number, callback: () => void): void {
-        this.server.listen(port, callback);
+        // Explicitly bind to '0.0.0.0' to listen across all local interface adapters
+        this.server.listen(port, '0.0.0.0', callback);
     }
 
     /**
