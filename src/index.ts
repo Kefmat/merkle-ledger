@@ -1,51 +1,20 @@
 import { MemoryStorage } from './storage/memoryStorage.js';
-import { MerkleMountainRange } from './mmr/mmr.js';
-import { MerkleProofEngine } from './proofs/engine.js';
+import { LedgerServer } from './server.js';
 
 /**
- * Execution entry point to demonstrate and test the cryptographic safety invariants 
- * of the Merkle Mountain Range tracking system.
+ * Service initialization pipeline binding internal components to active interface descriptors.
  */
-function runLedgerVerificationPipeline(): void {
-    console.log('Initializing cryptographic COMSEC ledger component architectures...');
-
-    const storageEngine = new MemoryStorage();
-    const ledger = new MerkleMountainRange(storageEngine);
-
-    // Append high-integrity operational logs to the structure
-    ledger.appendLeaf('TX_LOG_ENTRY_001: SYSTEM_INIT');
-    ledger.appendLeaf('TX_LOG_ENTRY_002: KEY_ROTATION_ROT_01');
-    ledger.appendLeaf('TX_LOG_ENTRY_003: ACCESS_GRANTED_ZONE_ALPHA');
+function bootMicroserviceInstance(): void {
+    console.log('Orchestrating internal cryptographic accumulator storage maps...');
     
-    // Track the index of the specific leaf we wish to audit
-    const targetLeafIndex = ledger.appendLeaf('TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE');
-    const leafValue = 'TX_LOG_ENTRY_004: DEVICE_PROVISION_SECURE';
-
-    const masterRootHash = ledger.getMasterRoot();
-    console.log(`Current Authoritative Master Root: ${masterRootHash}`);
-
-    console.log(`Generating authentic cryptographic inclusion proof for leaf index: ${targetLeafIndex}...`);
+    const persistentMemoryStore = new MemoryStorage();
+    const runtimeHttpDaemon = new LedgerServer(persistentMemoryStore);
     
-    // Generate a valid, non-mocked inclusion proof token using the upgraded MMR engine
-    const inclusionProof = ledger.generateInclusionProof(targetLeafIndex, leafValue);
+    const targetNetworkPort = 8080;
 
-    console.log(`Proof generated successfully. Number of sibling hashes collected: ${inclusionProof.siblings.length}`);
-    inclusionProof.siblings.forEach((hash: string, idx: number) => {
-        console.log(`  Sibling [${idx}]: ${hash}`);
+    runtimeHttpDaemon.listen(targetNetworkPort, () => {
+        console.log(`Secured auditing layer operational across network interfaces. Daemon running on port: ${targetNetworkPort}`);
     });
-
-    console.log('Passing proof package to the static MerkleProofEngine for structural verification...');
-
-    // Validate integrity parameters using the static proof verification engine passing peak markers
-    const isValid = MerkleProofEngine.verifyInclusion(
-        masterRootHash,
-        inclusionProof.leafValue,
-        inclusionProof.leafIndex,
-        inclusionProof.siblings,
-        inclusionProof.peakHashes
-    );
-
-    console.log(`Execution Complete. Cryptographic inclusion match state: ${isValid}`);
 }
 
-runLedgerVerificationPipeline();
+bootMicroserviceInstance();
