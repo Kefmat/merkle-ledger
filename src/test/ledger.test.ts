@@ -129,4 +129,33 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
 
         assert.strictEqual(isValidExtension, true);
     });
+
+    test('should validate batch operations matching multi-inclusion structural invariants', () => {
+        const storage = new MemoryStorage();
+        const ledger = new MerkleMountainRange(storage);
+
+        ledger.appendLeaf('TX_BATCH_01');
+        ledger.appendLeaf('TX_BATCH_02');
+        ledger.appendLeaf('TX_BATCH_03');
+        ledger.appendLeaf('TX_BATCH_04');
+
+        const masterRoot = ledger.getMasterRoot();
+        const peakHashes = ledger.getPeakHashes();
+
+        const monitoredLeaves = [
+            { index: 0, value: 'TX_BATCH_01' },
+            { index: 1, value: 'TX_BATCH_02' }
+        ];
+
+        const generatedProofHashes: string[] = []; 
+
+        const isValidBatch = MerkleProofEngine.verifyMultiInclusion(
+            masterRoot,
+            monitoredLeaves,
+            generatedProofHashes,
+            peakHashes
+        );
+
+        assert.strictEqual(isValidBatch, true);
+    });
 });
