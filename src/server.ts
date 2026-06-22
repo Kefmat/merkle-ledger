@@ -111,152 +111,159 @@ export class LedgerServer {
 
     /**
      * Routes incoming telemetry buffers dynamically based on request path attributes.
+     * Wrapped completely within an error-trapping boundary to catch unexpected exceptions.
      * @param req The active inbound connection context wrapper.
      * @param res The outbound network response serialization boundary.
      */
     private handleNetworkRequest(req: IncomingMessage, res: ServerResponse): void {
-        const urlInstance = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
-        const path = urlInstance.pathname;
+        try {
+            const urlInstance = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
+            const path = urlInstance.pathname;
 
-        // Route: Append Entry Log
-        if (path === '/append' && req.method === 'POST') {
-            let bufferAccumulator = '';
-            req.on('data', (chunk: Buffer) => {
-                bufferAccumulator += chunk.toString();
-            });
+            // Route: Append Entry Log
+            if (path === '/append' && req.method === 'POST') {
+                let bufferAccumulator = '';
+                req.on('data', (chunk: Buffer) => {
+                    bufferAccumulator += chunk.toString();
+                });
 
-            req.on('end', () => {
-                try {
-                    const payload: unknown = JSON.parse(bufferAccumulator);
-                    if (!this.isValidAppendPayload(payload)) {
-                        this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Must contain a non-empty string "value" property.' });
-                        return;
+                req.on('end', () => {
+                    try {
+                        const payload: unknown = JSON.parse(bufferAccumulator);
+                        if (!this.isValidAppendPayload(payload)) {
+                            this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Must contain a non-empty string "value" property.' });
+                            return;
+                        }
+
+                        const allocatedLeafIndex = this.ledger.appendLeaf(payload.value);
+                        const systemMasterRoot = this.ledger.getMasterRoot();
+
+                        this.writeJsonResponse(res, 201, {
+                            leafIndex: allocatedLeafIndex,
+                            masterRoot: systemMasterRoot
+                        });
+                    } catch {
+                        this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata. Request body is not valid JSON.' });
                     }
+                });
+                return;
+            }
 
-                    const allocatedLeafIndex = this.ledger.appendLeaf(payload.value);
-                    const systemMasterRoot = this.ledger.getMasterRoot();
+            // Route: Compile Inclusion Proof
+            if (path === '/proof' && req.method === 'GET') {
+                const indexParameter = urlInstance.searchParams.get('leafIndex');
+                const dataParameter = urlInstance.searchParams.get('value');
 
-                    this.writeJsonResponse(res, 201, {
-                        leafIndex: allocatedLeafIndex,
-                        masterRoot: systemMasterRoot
+                if (indexParameter === null || dataParameter === null || dataParameter.trim().length === 0) {
+                    this.writeJsonResponse(res, 400, { error: 'Query bounds must define absolute "leafIndex" and explicit "value" fields.' });
+                    return;
+                }
+
+                const evaluatedIndex = parseInt(indexParameter, 10);
+                if (isNaN(evaluatedIndex) || evaluatedIndex < 0) {
+                    this.writeJsonResponse(res, 400, { error: 'Query bound "leafIndex" must be a non-negative integers configuration parameter.' });
+                    return;
+                }
+
+                try {
+                    const completeProofPacket = this.ledger.generateInclusionProof(evaluatedIndex, dataParameter);
+                    const currentMasterRoot = this.ledger.getMasterRoot();
+
+                    this.writeJsonResponse(res, 200, {
+                        proof: completeProofPacket,
+                        masterRoot: currentMasterRoot
                     });
-                } catch {
-                    this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata. Request body is not valid JSON.' });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : 'Unknown execution error.';
+                    this.writeJsonResponse(res, 404, { error: message });
                 }
-            });
-            return;
-        }
-
-        // Route: Compile Inclusion Proof
-        if (path === '/proof' && req.method === 'GET') {
-            const indexParameter = urlInstance.searchParams.get('leafIndex');
-            const dataParameter = urlInstance.searchParams.get('value');
-
-            if (indexParameter === null || dataParameter === null || dataParameter.trim().length === 0) {
-                this.writeJsonResponse(res, 400, { error: 'Query bounds must define absolute "leafIndex" and explicit "value" fields.' });
                 return;
             }
 
-            const evaluatedIndex = parseInt(indexParameter, 10);
-            if (isNaN(evaluatedIndex) || evaluatedIndex < 0) {
-                this.writeJsonResponse(res, 400, { error: 'Query bound "leafIndex" must be a non-negative integers configuration parameter.' });
-                return;
-            }
+            // Route: Compile Consistency Proof
+            if (path === '/consistency' && req.method === 'GET') {
+                const oldSizeParameter = urlInstance.searchParams.get('oldSize');
+                if (!oldSizeParameter) {
+                    this.writeJsonResponse(res, 400, { error: 'Query parameter must specify a valid historical oldSize boundary.' });
+                    return;
+                }
 
-            try {
-                const completeProofPacket = this.ledger.generateInclusionProof(evaluatedIndex, dataParameter);
-                const currentMasterRoot = this.ledger.getMasterRoot();
+                const parsedOldSize = parseInt(oldSizeParameter, 10);
+                if (isNaN(parsedOldSize) || parsedOldSize <= 0) {
+                    this.writeJsonResponse(res, 400, { error: 'Query bound "oldSize" must be an integer baseline configuration greater than zero.' });
+                    return;
+                }
 
-                this.writeJsonResponse(res, 200, {
-                    proof: completeProofPacket,
-                    masterRoot: currentMasterRoot
-                });
-            } catch (error) {
-                const message = error instanceof Error ? error.message : 'Unknown execution error.';
-                this.writeJsonResponse(res, 404, { error: message });
-            }
-            return;
-        }
-
-        // Route: Compile Consistency Proof
-        if (path === '/consistency' && req.method === 'GET') {
-            const oldSizeParameter = urlInstance.searchParams.get('oldSize');
-            if (!oldSizeParameter) {
-                this.writeJsonResponse(res, 400, { error: 'Query parameter must specify a valid historical oldSize boundary.' });
-                return;
-            }
-
-            const parsedOldSize = parseInt(oldSizeParameter, 10);
-            if (isNaN(parsedOldSize) || parsedOldSize <= 0) {
-                this.writeJsonResponse(res, 400, { error: 'Query bound "oldSize" must be an integer baseline configuration greater than zero.' });
-                return;
-            }
-
-            try {
-                const consistencyProofPacket = this.ledger.generateConsistencyProof(parsedOldSize);
-                const currentMasterRoot = this.ledger.getMasterRoot();
-                const activePeakHashes = this.ledger.getPeakHashes();
-
-                this.writeJsonResponse(res, 200, {
-                    proof: consistencyProofPacket,
-                    currentMasterRoot,
-                    currentPeakHashes: activePeakHashes
-                });
-            } catch (error) {
-                const message = error instanceof Error ? error.message : 'Unknown consistency evaluation error.';
-                this.writeJsonResponse(res, 404, { error: message });
-            }
-            return;
-        }
-
-        // Route: Verify Structural Proofs (Inclusion or Consistency)
-        if (path === '/verify' && req.method === 'POST') {
-            let bufferAccumulator = '';
-            req.on('data', (chunk: Buffer) => {
-                bufferAccumulator += chunk.toString();
-            });
-
-            req.on('end', () => {
                 try {
-                    const payload: unknown = JSON.parse(bufferAccumulator);
-                    if (!this.isValidVerifyPayload(payload)) {
-                        this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Structural keys are corrupted or mismatched for type.' });
-                        return;
-                    }
+                    const consistencyProofPacket = this.ledger.generateConsistencyProof(parsedOldSize);
+                    const currentMasterRoot = this.ledger.getMasterRoot();
+                    const activePeakHashes = this.ledger.getPeakHashes();
 
-                    if (payload.type === 'inclusion') {
-                        const isValid = MerkleProofEngine.verifyInclusion(
-                            payload.rootHash!,
-                            payload.leafValue!,
-                            payload.leafIndex!,
-                            payload.siblings!,
-                            payload.peakHashes ?? []
-                        );
-                        this.writeJsonResponse(res, 200, { valid: isValid });
-                        return;
-                    }
-
-                    if (payload.type === 'consistency') {
-                        const isValid = MerkleProofEngine.verifyConsistency(
-                            payload.oldRootHash!,
-                            payload.newRootHash!,
-                            payload.proofHashes!,
-                            payload.currentPeakHashes!
-                        );
-                        this.writeJsonResponse(res, 200, { valid: isValid });
-                        return;
-                    }
-
-                    this.writeJsonResponse(res, 400, { error: 'Invalid or unallocated verification type context.' });
-                } catch {
-                    this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata. Request body is not valid JSON.' });
+                    this.writeJsonResponse(res, 200, {
+                        proof: consistencyProofPacket,
+                        currentMasterRoot,
+                        currentPeakHashes: activePeakHashes
+                    });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : 'Unknown consistency evaluation error.';
+                    this.writeJsonResponse(res, 404, { error: message });
                 }
-            });
-            return;
-        }
+                return;
+            }
 
-        // Catch-all fallthrough fallback boundary
-        this.writeJsonResponse(res, 404, { error: 'Requested network orchestration endpoint is unallocated.' });
+            // Route: Verify Structural Proofs (Inclusion or Consistency)
+            if (path === '/verify' && req.method === 'POST') {
+                let bufferAccumulator = '';
+                req.on('data', (chunk: Buffer) => {
+                    bufferAccumulator += chunk.toString();
+                });
+
+                req.on('end', () => {
+                    try {
+                        const payload: unknown = JSON.parse(bufferAccumulator);
+                        if (!this.isValidVerifyPayload(payload)) {
+                            this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Structural keys are corrupted or mismatched for type.' });
+                            return;
+                        }
+
+                        if (payload.type === 'inclusion') {
+                            const isValid = MerkleProofEngine.verifyInclusion(
+                                payload.rootHash!,
+                                payload.leafValue!,
+                                payload.leafIndex!,
+                                payload.siblings!,
+                                payload.peakHashes ?? []
+                            );
+                            this.writeJsonResponse(res, 200, { valid: isValid });
+                            return;
+                        }
+
+                        if (payload.type === 'consistency') {
+                            const isValid = MerkleProofEngine.verifyConsistency(
+                                payload.oldRootHash!,
+                                payload.newRootHash!,
+                                payload.proofHashes!,
+                                payload.currentPeakHashes!
+                            );
+                            this.writeJsonResponse(res, 200, { valid: isValid });
+                            return;
+                        }
+
+                        this.writeJsonResponse(res, 400, { error: 'Invalid or unallocated verification type context.' });
+                    } catch {
+                        this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata. Request body is not valid JSON.' });
+                    }
+                });
+                return;
+            }
+
+            // Catch-all fallthrough fallback boundary
+            this.writeJsonResponse(res, 404, { error: 'Requested network orchestration endpoint is unallocated.' });
+        } catch (globalInternalError) {
+            // Trap low-level execution errors to return a 500 response instead of crashing the process
+            const msg = globalInternalError instanceof Error ? globalInternalError.message : 'Fatal unhandled engine panic.';
+            this.writeJsonResponse(res, 500, { error: 'Internal Server Error', details: msg });
+        }
     }
 
     /**
