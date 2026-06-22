@@ -9,13 +9,25 @@ function bootMicroserviceInstance(): void {
     
     const persistentMemoryStore = new MemoryStorage();
     const runtimeHttpDaemon = new LedgerServer(persistentMemoryStore);
-    
-    // Migrated port to 8088 to definitively clear local operating system socket contention
     const targetNetworkPort = 8088;
 
     runtimeHttpDaemon.listen(targetNetworkPort, () => {
         console.log(`Secured auditing layer operational across network interfaces. Daemon running on port: ${targetNetworkPort}`);
     });
+
+    /**
+     * Handles standard operating system termination traps to release port allocations.
+     */
+    const executionTeardownTrap = (): void => {
+        console.log('\nIntercepted process shutdown trigger. Disposing open server network interfaces...');
+        runtimeHttpDaemon.close();
+        console.log('Teardown complete. Exiting thread execution clean.');
+        process.exit(0);
+    };
+
+    // Register active process boundary signal event monitors
+    process.on('SIGINT', executionTeardownTrap);
+    process.on('SIGTERM', executionTeardownTrap);
 }
 
 bootMicroserviceInstance();
