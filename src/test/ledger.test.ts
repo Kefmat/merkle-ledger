@@ -15,6 +15,24 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
         }, /Persistence invariant violation/);
     });
 
+    test('should safely throw an error when generating inclusion proofs on an empty ledger', () => {
+        const storage = new MemoryStorage();
+        const ledger = new MerkleMountainRange(storage);
+        
+        assert.throws(() => {
+            ledger.generateInclusionProof(0, 'EMPTY_VAL');
+        }, /The ledger contains zero entries/);
+    });
+
+    test('should safely throw an error when generating consistency proofs on an empty ledger', () => {
+        const storage = new MemoryStorage();
+        const ledger = new MerkleMountainRange(storage);
+        
+        assert.throws(() => {
+            ledger.generateConsistencyProof(1);
+        }, /The ledger contains zero entries/);
+    });
+
     test('should accurately verify authentic inclusion proofs for arbitrary entries', () => {
         const storage = new MemoryStorage();
         const ledger = new MerkleMountainRange(storage);
@@ -50,7 +68,6 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
         const masterRoot = ledger.getMasterRoot();
         const proof = ledger.generateInclusionProof(targetIndex, 'AUTHENTIC_PAYLOAD');
 
-        // Execute a simulated intercept modification attack by passing forged data
         const isVerifiedWithTamperedData = MerkleProofEngine.verifyInclusion(
             masterRoot,
             'FORGED_TAMPERED_PAYLOAD',
@@ -73,7 +90,6 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
         const masterRoot = ledger.getMasterRoot();
         const proof = ledger.generateInclusionProof(targetIndex, 'LOG_BETA');
 
-        // Corrupt one historical sibling parameter within the tracking array
         if (proof.siblings.length > 0) {
             proof.siblings[0] = '0000000000000000000000000000000000000000000000000000000000000000';
         }
@@ -95,12 +111,12 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
 
         ledger.appendLeaf('TX_001');
         ledger.appendLeaf('TX_002');
-        const baselineRoot = ledger.getMasterRoot(); // Capture baseline state at size 2
+        const baselineRoot = ledger.getMasterRoot();
 
         ledger.appendLeaf('TX_003');
         ledger.appendLeaf('TX_004');
         ledger.appendLeaf('TX_005');
-        const extendedRoot = ledger.getMasterRoot(); // Extended state at size 5
+        const extendedRoot = ledger.getMasterRoot();
 
         const consistencyProof = ledger.generateConsistencyProof(2);
 
