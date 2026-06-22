@@ -82,9 +82,13 @@ export class MerkleMountainRange {
      * @param leafIndex The chronological leaf position identifier to verify.
      * @param rawValue The original unhashed string payload backing the leaf reference.
      * @returns A complete InclusionProof token structure.
-     * @throws Error if the specified leaf index does not map to an allocated element.
+     * @throws Error if the ledger is vacant or the specified leaf index is out of bounds.
      */
     public generateInclusionProof(leafIndex: number, rawValue: string): InclusionProof {
+        if (this.leafCount === 0) {
+            throw new Error(`Inclusion proof execution error: The ledger contains zero entries.`);
+        }
+
         const initialStorageIndex = this.leafToStorageMap.get(leafIndex);
         if (initialStorageIndex === undefined) {
             throw new Error(`Inclusion proof execution error: Leaf index ${leafIndex} is out of bounds.`);
@@ -127,8 +131,13 @@ export class MerkleMountainRange {
      * Simulates historical operations to construct the precise baseline peaks configuration.
      * @param oldSize The total record volume defining the historical reference point.
      * @returns A populated ConsistencyProof capsule containing evaluation parameters.
+     * @throws Error if the ledger is vacant or the baseline bounds parameters are invalid.
      */
     public generateConsistencyProof(oldSize: number): ConsistencyProof {
+        if (this.leafCount === 0) {
+            throw new Error(`Consistency proof calculation exception: The ledger contains zero entries.`);
+        }
+
         if (oldSize <= 0 || oldSize > this.leafCount) {
             throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
         }
