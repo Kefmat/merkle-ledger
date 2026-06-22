@@ -4,6 +4,29 @@ import { MerkleMountainRange } from './mmr/mmr.js';
 import { MerkleProofEngine } from './proofs/engine.js';
 
 /**
+ * Inbound transaction payload schema contract for append operations.
+ */
+interface AppendRequestPayload {
+    value: string;
+}
+
+/**
+ * Inbound proof verification payload schema contract for processing stateless assertions.
+ */
+interface VerifyRequestPayload {
+    type: 'inclusion' | 'consistency';
+    rootHash?: string;
+    leafValue?: string;
+    leafIndex?: number;
+    siblings?: string[];
+    peakHashes?: string[];
+    oldRootHash?: string;
+    newRootHash?: string;
+    proofHashes?: string[];
+    currentPeakHashes?: string[];
+}
+
+/**
  * Orchestrates a native non-blocking HTTP networking cluster to process operational 
  * transaction records and retrieve deterministic proof frames.
  */
@@ -37,6 +60,56 @@ export class LedgerServer {
     }
 
     /**
+     * Runtime validation type guard ensuring an unvalidated inbound object adheres strictly 
+     * to the AppendRequestPayload structure contract definitions.
+     * @param obj The candidate object parsed from the network buffer.
+     */
+    private isValidAppendPayload(obj: unknown): obj is AppendRequestPayload {
+        return (
+            typeof obj === 'object' &&
+            obj !== null &&
+            'value' in obj &&
+            typeof (obj as AppendRequestPayload).value === 'string' &&
+            (obj as AppendRequestPayload).value.trim().length > 0
+        );
+    }
+
+    /**
+     * Runtime validation type guard ensuring an unvalidated inbound object adheres strictly
+     * to the VerifyRequestPayload structure contract definitions.
+     * @param obj The candidate object parsed from the network buffer.
+     */
+    private isValidVerifyPayload(obj: unknown): obj is VerifyRequestPayload {
+        if (typeof obj !== 'object' || obj === null) {
+            return false;
+        }
+        
+        const candidate = obj as VerifyRequestPayload;
+        if (candidate.type !== 'inclusion' && candidate.type !== 'consistency') {
+            return false;
+        }
+
+        if (candidate.type === 'inclusion') {
+            return (
+                typeof candidate.rootHash === 'string' &&
+                typeof candidate.leafValue === 'string' &&
+                typeof candidate.leafIndex === 'number' &&
+                Array.isArray(candidate.siblings) &&
+                candidate.siblings.every(s => typeof s === 'string')
+            );
+        }
+
+        return (
+            typeof candidate.oldRootHash === 'string' &&
+            typeof candidate.newRootHash === 'string' &&
+            Array.isArray(candidate.proofHashes) &&
+            candidate.proofHashes.every(p => typeof p === 'string') &&
+            Array.isArray(candidate.currentPeakHashes) &&
+            candidate.currentPeakHashes.every(cp => typeof cp === 'string')
+        );
+    }
+
+    /**
      * Routes incoming telemetry buffers dynamically based on request path attributes.
      * @param req The active inbound connection context wrapper.
      * @param res The outbound network response serialization boundary.
@@ -54,9 +127,9 @@ export class LedgerServer {
 
             req.on('end', () => {
                 try {
-                    const payload = JSON.parse(bufferAccumulator) as { value?: string };
-                    if (!payload.value) {
-                        this.writeJsonResponse(res, 400, { error: 'Payload must contain a valid non-empty string reference.' });
+                    const payload: unknown = JSON.parse(bufferAccumulator);
+                    if (!this.isValidAppendPayload(payload)) {
+                        this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Must contain a non-empty string "value" property.' });
                         return;
                     }
 
@@ -68,7 +141,7 @@ export class LedgerServer {
                         masterRoot: systemMasterRoot
                     });
                 } catch {
-                    this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata.' });
+                    this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata. Request body is not valid JSON.' });
                 }
             });
             return;
@@ -79,13 +152,18 @@ export class LedgerServer {
             const indexParameter = urlInstance.searchParams.get('leafIndex');
             const dataParameter = urlInstance.searchParams.get('value');
 
-            if (!indexParameter || !dataParameter) {
-                this.writeJsonResponse(res, 400, { error: 'Query bounds must define absolute leafIndex and explicit value fields.' });
+            if (indexParameter === null || dataParameter === null || dataParameter.trim().length === 0) {
+                this.writeJsonResponse(res, 400, { error: 'Query bounds must define absolute "leafIndex" and explicit "value" fields.' });
+                return;
+            }
+
+            const evaluatedIndex = parseInt(indexParameter, 10);
+            if (isNaN(evaluatedIndex) || evaluatedIndex < 0) {
+                this.writeJsonResponse(res, 400, { error: 'Query bound "leafIndex" must be a non-negative integers configuration parameter.' });
                 return;
             }
 
             try {
-                const evaluatedIndex = parseInt(indexParameter, 10);
                 const completeProofPacket = this.ledger.generateInclusionProof(evaluatedIndex, dataParameter);
                 const currentMasterRoot = this.ledger.getMasterRoot();
 
@@ -108,8 +186,13 @@ export class LedgerServer {
                 return;
             }
 
+            const parsedOldSize = parseInt(oldSizeParameter, 10);
+            if (isNaN(parsedOldSize) || parsedOldSize <= 0) {
+                this.writeJsonResponse(res, 400, { error: 'Query bound "oldSize" must be an integer baseline configuration greater than zero.' });
+                return;
+            }
+
             try {
-                const parsedOldSize = parseInt(oldSizeParameter, 10);
                 const consistencyProofPacket = this.ledger.generateConsistencyProof(parsedOldSize);
                 const currentMasterRoot = this.ledger.getMasterRoot();
                 const activePeakHashes = this.ledger.getPeakHashes();
@@ -135,29 +218,18 @@ export class LedgerServer {
 
             req.on('end', () => {
                 try {
-                    const payload = JSON.parse(bufferAccumulator) as {
-                        type?: 'inclusion' | 'consistency';
-                        rootHash?: string;
-                        leafValue?: string;
-                        leafIndex?: number;
-                        siblings?: string[];
-                        peakHashes?: string[];
-                        oldRootHash?: string;
-                        newRootHash?: string;
-                        proofHashes?: string[];
-                        currentPeakHashes?: string[];
-                    };
+                    const payload: unknown = JSON.parse(bufferAccumulator);
+                    if (!this.isValidVerifyPayload(payload)) {
+                        this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Structural keys are corrupted or mismatched for type.' });
+                        return;
+                    }
 
                     if (payload.type === 'inclusion') {
-                        if (!payload.rootHash || !payload.leafValue || payload.leafIndex === undefined || !payload.siblings) {
-                            this.writeJsonResponse(res, 400, { error: 'Missing properties for inclusion verification.' });
-                            return;
-                        }
                         const isValid = MerkleProofEngine.verifyInclusion(
-                            payload.rootHash,
-                            payload.leafValue,
-                            payload.leafIndex,
-                            payload.siblings,
+                            payload.rootHash!,
+                            payload.leafValue!,
+                            payload.leafIndex!,
+                            payload.siblings!,
                             payload.peakHashes ?? []
                         );
                         this.writeJsonResponse(res, 200, { valid: isValid });
@@ -165,15 +237,11 @@ export class LedgerServer {
                     }
 
                     if (payload.type === 'consistency') {
-                        if (!payload.oldRootHash || !payload.newRootHash || !payload.proofHashes || !payload.currentPeakHashes) {
-                            this.writeJsonResponse(res, 400, { error: 'Missing properties for consistency verification.' });
-                            return;
-                        }
                         const isValid = MerkleProofEngine.verifyConsistency(
-                            payload.oldRootHash,
-                            payload.newRootHash,
-                            payload.proofHashes,
-                            payload.currentPeakHashes
+                            payload.oldRootHash!,
+                            payload.newRootHash!,
+                            payload.proofHashes!,
+                            payload.currentPeakHashes!
                         );
                         this.writeJsonResponse(res, 200, { valid: isValid });
                         return;
@@ -181,7 +249,7 @@ export class LedgerServer {
 
                     this.writeJsonResponse(res, 400, { error: 'Invalid or unallocated verification type context.' });
                 } catch {
-                    this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata.' });
+                    this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata. Request body is not valid JSON.' });
                 }
             });
             return;
