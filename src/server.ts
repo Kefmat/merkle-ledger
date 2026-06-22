@@ -14,7 +14,7 @@ interface AppendRequestPayload {
  * Inbound proof verification payload schema contract for processing stateless assertions.
  */
 interface VerifyRequestPayload {
-    type: 'inclusion' | 'consistency';
+    type: 'inclusion' | 'consistency' | 'batch-inclusion';
     rootHash?: string;
     leafValue?: string;
     leafIndex?: number;
@@ -24,6 +24,7 @@ interface VerifyRequestPayload {
     newRootHash?: string;
     proofHashes?: string[];
     currentPeakHashes?: string[];
+    leaves?: Array<{ index: number; value: string }>;
 }
 
 /**
@@ -85,7 +86,7 @@ export class LedgerServer {
         }
         
         const candidate = obj as VerifyRequestPayload;
-        if (candidate.type !== 'inclusion' && candidate.type !== 'consistency') {
+        if (candidate.type !== 'inclusion' && candidate.type !== 'consistency' && candidate.type !== 'batch-inclusion') {
             return false;
         }
 
@@ -99,14 +100,30 @@ export class LedgerServer {
             );
         }
 
-        return (
-            typeof candidate.oldRootHash === 'string' &&
-            typeof candidate.newRootHash === 'string' &&
-            Array.isArray(candidate.proofHashes) &&
-            candidate.proofHashes.every(p => typeof p === 'string') &&
-            Array.isArray(candidate.currentPeakHashes) &&
-            candidate.currentPeakHashes.every(cp => typeof cp === 'string')
-        );
+        if (candidate.type === 'consistency') {
+            return (
+                typeof candidate.oldRootHash === 'string' &&
+                typeof candidate.newRootHash === 'string' &&
+                Array.isArray(candidate.proofHashes) &&
+                candidate.proofHashes.every(p => typeof p === 'string') &&
+                Array.isArray(candidate.currentPeakHashes) &&
+                candidate.currentPeakHashes.every(cp => typeof cp === 'string')
+            );
+        }
+
+        if (candidate.type === 'batch-inclusion') {
+            return (
+                typeof candidate.rootHash === 'string' &&
+                Array.isArray(candidate.leaves) &&
+                candidate.leaves.every(l => typeof l === 'object' && l !== null && typeof l.index === 'number' && typeof l.value === 'string') &&
+                Array.isArray(candidate.proofHashes) &&
+                candidate.proofHashes.every(p => typeof p === 'string') &&
+                Array.isArray(candidate.peakHashes) &&
+                candidate.peakHashes.every(ph => typeof ph === 'string')
+            );
+        }
+
+        return false;
     }
 
     /**
@@ -211,7 +228,7 @@ export class LedgerServer {
                 return;
             }
 
-            // Route: Verify Structural Proofs (Inclusion or Consistency)
+            // Route: Verify Structural Proofs (Inclusion, Consistency, or Batch Inclusion)
             if (path === '/verify' && req.method === 'POST') {
                 let bufferAccumulator = '';
                 req.on('data', (chunk: Buffer) => {
@@ -244,6 +261,17 @@ export class LedgerServer {
                                 payload.newRootHash!,
                                 payload.proofHashes!,
                                 payload.currentPeakHashes!
+                            );
+                            this.writeJsonResponse(res, 200, { valid: isValid });
+                            return;
+                        }
+
+                        if (payload.type === 'batch-inclusion') {
+                            const isValid = MerkleProofEngine.verifyMultiInclusion(
+                                payload.rootHash!,
+                                payload.leaves!,
+                                payload.proofHashes!,
+                                payload.peakHashes!
                             );
                             this.writeJsonResponse(res, 200, { valid: isValid });
                             return;
