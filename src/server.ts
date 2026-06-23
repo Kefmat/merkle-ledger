@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { MemoryStorage } from './storage/memoryStorage.js';
+import { DiskStorage } from './storage/diskStorage.js';
 import { MerkleMountainRange } from './mmr/mmr.js';
 import { MerkleProofEngine } from './proofs/engine.js';
 
@@ -37,9 +37,9 @@ export class LedgerServer {
 
     /**
      * Initializes the microservice abstraction using bounded cryptographic engines.
-     * @param storage The index-addressable storage map backing tracking metrics.
+     * @param storage The persistent disk storage engine backing the tracking metrics.
      */
-    constructor(storage: MemoryStorage) {
+    constructor(storage: DiskStorage) {
         this.ledger = new MerkleMountainRange(storage);
         this.server = createServer((req: IncomingMessage, res: ServerResponse) => this.handleNetworkRequest(req, res));
     }
