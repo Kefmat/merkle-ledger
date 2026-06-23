@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { MemoryStorage } from '../storage/memoryStorage.js';
+import { DiskStorage } from '../storage/diskStorage.js';
 import { MathUtilities } from './math.js';
 import { InclusionProof, ConsistencyProof } from '../types/index.js';
 
@@ -20,7 +20,7 @@ interface PeakMarker {
  * the cascading merges required to maintain historical consistency and immutability.
  */
 export class MerkleMountainRange {
-    private readonly storage: MemoryStorage;
+    private readonly storage: DiskStorage;
     private peaks: PeakMarker[] = [];
     private nextStorageIndex: number = 0;
     private readonly leafToStorageMap: Map<number, number> = new Map();
@@ -30,8 +30,72 @@ export class MerkleMountainRange {
      * Instantiates the Merkle Mountain Range with an underlying persistence layer.
      * @param storage The index-addressable storage implementation.
      */
-    constructor(storage: MemoryStorage) {
+    constructor(storage: DiskStorage) {
         this.storage = storage;
+        this.hydrateStateFromStorage();
+    }
+
+    /**
+     * Loops through sequential data nodes found within disk logs to restore tree parameters.
+     */
+    private hydrateStateFromStorage(): void {
+        let leafIterationCounter = 0;
+        let storageIterationIndex = 0;
+
+        while (true) {
+            const hash = this.storage.readNode(storageIterationIndex);
+            if (!hash) {
+                break;
+            }
+
+            const currentHeight = MathUtilities.getNodeHeight(storageIterationIndex);
+            if (currentHeight === 0) {
+                this.leafToStorageMap.set(leafIterationCounter, storageIterationIndex);
+                leafIterationCounter++;
+            }
+
+            storageIterationIndex++;
+        }
+
+        this.nextStorageIndex = storageIterationIndex;
+        this.leafCount = leafIterationCounter;
+        this.rebuildActivePeaksCache();
+    }
+
+    /**
+     * Regenerates active mountain range peak indices based on active leaf boundaries.
+     */
+    private rebuildActivePeaksCache(): void {
+        this.peaks = [];
+        if (this.leafCount === 0) {
+            return;
+        }
+
+        // Simulate topological processing up to our current leaf volume boundary
+        for (let i = 0; i < this.leafCount; i++) {
+            const storageIndex = this.leafToStorageMap.get(i)!;
+            const hash = this.storage.readNode(storageIndex)!;
+
+            let newPeak: PeakMarker = {
+                storageIndex,
+                height: 0,
+                hash
+            };
+
+            let trackIdx = storageIndex;
+            while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
+                const leftPeak = this.peaks.pop()!;
+                trackIdx++; // Navigate directly to parent storage slot
+                const parentHash = this.storage.readNode(trackIdx)!;
+
+                newPeak = {
+                    storageIndex: trackIdx,
+                    height: leftPeak.height + 1,
+                    hash: parentHash
+                };
+            }
+            this.peaks.push(newPeak);
+        }
     }
 
     /**
@@ -202,6 +266,44 @@ export class MerkleMountainRange {
             dynamicRoot = this.calculateHash(this.peaks[i].hash + dynamicRoot);
         }
 
+        return dynamicRoot;
+    }
+
+    /**
+     * Reconstructs and returns what the master root evaluated to at a specific historical point in time.
+     * @param targetSize The historical leaf count snapshot marker to audit.
+     * @returns The master root hash commitment at that exact point.
+     */
+    public getMasterRootAtSize(targetSize: number): string {
+        if (targetSize <= 0 || targetSize > this.leafCount) {
+            throw new Error(`Audit exception: Historical snapshot size ${targetSize} is out of active bounds.`);
+        }
+
+        let virtualPeaks: Array<{ height: number; hash: string }> = [];
+        
+        for (let i = 0; i < targetSize; i++) {
+            const leafIdx = this.leafToStorageMap.get(i)!;
+            const initialHash = this.storage.readNode(leafIdx)!;
+            let newVirtualPeak = { height: 0, hash: initialHash };
+
+            while (virtualPeaks.length > 0 && virtualPeaks[virtualPeaks.length - 1].height === newVirtualPeak.height) {
+                const leftVirtualPeak = virtualPeaks.pop()!;
+                const parentHash = this.calculateHash(leftVirtualPeak.hash + newVirtualPeak.hash);
+                newVirtualPeak = {
+                    height: leftVirtualPeak.height + 1,
+                    hash: parentHash
+                };
+            }
+            virtualPeaks.push(newVirtualPeak);
+        }
+
+        if (virtualPeaks.length === 0) return this.calculateHash('');
+        if (virtualPeaks.length === 1) return virtualPeaks[0].hash;
+
+        let dynamicRoot = virtualPeaks[virtualPeaks.length - 1].hash;
+        for (let i = virtualPeaks.length - 2; i >= 0; i--) {
+            dynamicRoot = this.calculateHash(virtualPeaks[i].hash + dynamicRoot);
+        }
         return dynamicRoot;
     }
 
