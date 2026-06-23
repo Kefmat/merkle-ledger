@@ -41,40 +41,42 @@ export class MerkleMountainRange {
      * @returns The chronological leaf index assigned to the newly appended leaf.
      */
     public appendLeaf(value: string): number {
-        const currentHash = this.calculateHash(value);
-        const currentHeight = 0;
-        const assignedLeafIndex = this.leafCount;
-        const assignedStorageIndex = this.nextStorageIndex;
+        return this.tracePerformanceMetrics(`appendLeaf(${this.calculateHash(value).substring(0, 8)})`, () => {
+            const currentHash = this.calculateHash(value);
+            const currentHeight = 0;
+            const assignedLeafIndex = this.leafCount;
+            const assignedStorageIndex = this.nextStorageIndex;
 
-        this.leafToStorageMap.set(assignedLeafIndex, assignedStorageIndex);
-        this.storage.writeNode(assignedStorageIndex, currentHash);
-        
-        let newPeak: PeakMarker = {
-            storageIndex: assignedStorageIndex,
-            height: currentHeight,
-            hash: currentHash
-        };
-        this.nextStorageIndex++;
-        this.leafCount++;
-
-        // Cascading merge loop: combine left and right peaks of equal height
-        while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
-            const leftPeak = this.peaks.pop()!;
-            const parentHash = this.calculateHash(leftPeak.hash + newPeak.hash);
-            const parentIndex = this.nextStorageIndex;
+            this.leafToStorageMap.set(assignedLeafIndex, assignedStorageIndex);
+            this.storage.writeNode(assignedStorageIndex, currentHash);
             
-            this.storage.writeNode(parentIndex, parentHash);
-            this.nextStorageIndex++;
-
-            newPeak = {
-                storageIndex: parentIndex,
-                height: leftPeak.height + 1,
-                hash: parentHash
+            let newPeak: PeakMarker = {
+                storageIndex: assignedStorageIndex,
+                height: currentHeight,
+                hash: currentHash
             };
-        }
+            this.nextStorageIndex++;
+            this.leafCount++;
 
-        this.peaks.push(newPeak);
-        return assignedLeafIndex;
+            // Cascading merge loop: combine left and right peaks of equal height
+            while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
+                const leftPeak = this.peaks.pop()!;
+                const parentHash = this.calculateHash(leftPeak.hash + newPeak.hash);
+                const parentIndex = this.nextStorageIndex;
+                
+                this.storage.writeNode(parentIndex, parentHash);
+                this.nextStorageIndex++;
+
+                newPeak = {
+                    storageIndex: parentIndex,
+                    height: leftPeak.height + 1,
+                    hash: parentHash
+                };
+            }
+
+            this.peaks.push(newPeak);
+            return assignedLeafIndex;
+        });
     }
 
     /**
@@ -85,45 +87,47 @@ export class MerkleMountainRange {
      * @throws Error if the ledger is vacant or the specified leaf index is out of bounds.
      */
     public generateInclusionProof(leafIndex: number, rawValue: string): InclusionProof {
-        if (this.leafCount === 0) {
-            throw new Error(`Inclusion proof execution error: The ledger contains zero entries.`);
-        }
-
-        const initialStorageIndex = this.leafToStorageMap.get(leafIndex);
-        if (initialStorageIndex === undefined) {
-            throw new Error(`Inclusion proof execution error: Leaf index ${leafIndex} is out of bounds.`);
-        }
-
-        const siblingsCollection: string[] = [];
-        let currentStorageIndex = initialStorageIndex;
-        let currentHeight = MathUtilities.getNodeHeight(currentStorageIndex);
-
-        // Climb the tree path until reaching an isolated mountain peak
-        while (currentStorageIndex < this.nextStorageIndex) {
-            const siblingIndex = MathUtilities.getSiblingIndex(currentStorageIndex, currentHeight);
-            const siblingHash = this.storage.readNode(siblingIndex);
-            
-            if (!siblingHash) {
-                break; // Sibling is unallocated, indicating we hit a peak root boundary
+        return this.tracePerformanceMetrics(`generateInclusionProof(${leafIndex})`, () => {
+            if (this.leafCount === 0) {
+                throw new Error(`Inclusion proof execution error: The ledger contains zero entries.`);
             }
 
-            siblingsCollection.push(siblingHash);
-            
-            // Determine parent index coordinate sequentially under post-order rules
-            if (siblingIndex > currentStorageIndex) {
-                currentStorageIndex = siblingIndex + 1;
-            } else {
-                currentStorageIndex = currentStorageIndex + 1;
+            const initialStorageIndex = this.leafToStorageMap.get(leafIndex);
+            if (initialStorageIndex === undefined) {
+                throw new Error(`Inclusion proof execution error: Leaf index ${leafIndex} is out of bounds.`);
             }
-            currentHeight++;
-        }
 
-        return {
-            leafIndex,
-            leafValue: rawValue,
-            siblings: siblingsCollection,
-            peakHashes: this.getPeakHashes()
-        };
+            const siblingsCollection: string[] = [];
+            let currentStorageIndex = initialStorageIndex;
+            let currentHeight = MathUtilities.getNodeHeight(currentStorageIndex);
+
+            // Climb the tree path until reaching an isolated mountain peak
+            while (currentStorageIndex < this.nextStorageIndex) {
+                const siblingIndex = MathUtilities.getSiblingIndex(currentStorageIndex, currentHeight);
+                const siblingHash = this.storage.readNode(siblingIndex);
+                
+                if (!siblingHash) {
+                    break; // Sibling is unallocated, indicating we hit a peak root boundary
+                }
+
+                siblingsCollection.push(siblingHash);
+                
+                // Determine parent index coordinate sequentially under post-order rules
+                if (siblingIndex > currentStorageIndex) {
+                    currentStorageIndex = siblingIndex + 1;
+                } else {
+                    currentStorageIndex = currentStorageIndex + 1;
+                }
+                currentHeight++;
+            }
+
+            return {
+                leafIndex,
+                leafValue: rawValue,
+                siblings: siblingsCollection,
+                peakHashes: this.getPeakHashes()
+            };
+        });
     }
 
     /**
@@ -134,47 +138,49 @@ export class MerkleMountainRange {
      * @throws Error if the ledger is vacant or the baseline bounds parameters are invalid.
      */
     public generateConsistencyProof(oldSize: number): ConsistencyProof {
-        if (this.leafCount === 0) {
-            throw new Error(`Consistency proof calculation exception: The ledger contains zero entries.`);
-        }
-
-        if (oldSize <= 0 || oldSize > this.leafCount) {
-            throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
-        }
-
-        // Reconstruct what the peaks array looked like when leafCount matched oldSize
-        let virtualPeaks: Array<{ height: number; hash: string }> = [];
-        
-        for (let i = 0; i < oldSize; i++) {
-            const leafStorageIdx = this.leafToStorageMap.get(i);
-            if (leafStorageIdx === undefined) {
-                continue;
-            }
-            const initialHash = this.storage.readNode(leafStorageIdx);
-            if (!initialHash) {
-                continue;
+        return this.tracePerformanceMetrics(`generateConsistencyProof(${oldSize})`, () => {
+            if (this.leafCount === 0) {
+                throw new Error(`Consistency proof calculation exception: The ledger contains zero entries.`);
             }
 
-            let newVirtualPeak = { height: 0, hash: initialHash };
-
-            while (virtualPeaks.length > 0 && virtualPeaks[virtualPeaks.length - 1].height === newVirtualPeak.height) {
-                const leftVirtualPeak = virtualPeaks.pop()!;
-                const parentHash = this.calculateHash(leftVirtualPeak.hash + newVirtualPeak.hash);
-                newVirtualPeak = {
-                    height: leftVirtualPeak.height + 1,
-                    hash: parentHash
-                };
+            if (oldSize <= 0 || oldSize > this.leafCount) {
+                throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
             }
-            virtualPeaks.push(newVirtualPeak);
-        }
 
-        const historicalProofHashes = virtualPeaks.map(vp => vp.hash);
+            // Reconstruct what the peaks array looked like when leafCount matched oldSize
+            let virtualPeaks: Array<{ height: number; hash: string }> = [];
+            
+            for (let i = 0; i < oldSize; i++) {
+                const leafStorageIdx = this.leafToStorageMap.get(i);
+                if (leafStorageIdx === undefined) {
+                    continue;
+                }
+                const initialHash = this.storage.readNode(leafStorageIdx);
+                if (!initialHash) {
+                    continue;
+                }
 
-        return {
-            oldSize,
-            newSize: this.leafCount,
-            proofHashes: historicalProofHashes
-        };
+                let newVirtualPeak = { height: 0, hash: initialHash };
+
+                while (virtualPeaks.length > 0 && virtualPeaks[virtualPeaks.length - 1].height === newVirtualPeak.height) {
+                    const leftVirtualPeak = virtualPeaks.pop()!;
+                    const parentHash = this.calculateHash(leftVirtualPeak.hash + newVirtualPeak.hash);
+                    newVirtualPeak = {
+                        height: leftVirtualPeak.height + 1,
+                        hash: parentHash
+                    };
+                }
+                virtualPeaks.push(newVirtualPeak);
+            }
+
+            const historicalProofHashes = virtualPeaks.map(vp => vp.hash);
+
+            return {
+                oldSize,
+                newSize: this.leafCount,
+                proofHashes: historicalProofHashes
+            };
+        });
     }
 
     /**
@@ -222,5 +228,21 @@ export class MerkleMountainRange {
      */
     private calculateHash(data: string): string {
         return createHash('sha256').update(data).digest('hex');
+    }
+
+    /**
+     * Executes an operational closure block and logs execution performance metrics.
+     * @param label The descriptive identifier of the transaction metric category.
+     * @param operation The execution handler function closure block to measure.
+     */
+    private tracePerformanceMetrics<T>(label: string, operation: () => T): T {
+        const timestampStart = process.hrtime.bigint();
+        try {
+            return operation();
+        } finally {
+            const timestampEnd = process.hrtime.bigint();
+            const elapsedMicroseconds = Number(timestampEnd - timestampStart) / 1000;
+            console.log(`[TELEMETRIC SNAPSHOT] ${label} completed in ${elapsedMicroseconds.toFixed(3)} μs`);
+        }
     }
 }
