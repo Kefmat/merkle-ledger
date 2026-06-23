@@ -1,13 +1,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { MemoryStorage } from '../storage/memoryStorage.js';
+import { tmpdir } from 'os';
+import { DiskStorage } from '../storage/diskStorage.js';
 import { MerkleMountainRange } from '../mmr/mmr.js';
 import { MerkleProofEngine } from '../proofs/engine.js';
 
 describe('Merkle Mountain Range Cryptographic Suite', () => {
 
     test('should maintain immutability and reject index modification overwrites', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_1.immr');
+        storage.clearDatabase();
         storage.writeNode(10, '8a3c61b1');
         
         assert.throws(() => {
@@ -16,7 +18,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should safely throw an error when generating inclusion proofs on an empty ledger', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_2.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
         
         assert.throws(() => {
@@ -25,7 +28,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should safely throw an error when generating consistency proofs on an empty ledger', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_3.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
         
         assert.throws(() => {
@@ -34,7 +38,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should accurately verify authentic inclusion proofs for arbitrary entries', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_4.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
         ledger.appendLeaf('RECORD_001');
@@ -58,7 +63,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should reject inclusion matching if the data payload has been altered', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_5.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
         ledger.appendLeaf('SYSTEM_STATE_NORMAL');
@@ -80,7 +86,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should reject verification claims if a sibling path token is corrupted', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_6.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
         ledger.appendLeaf('LOG_ALPHA');
@@ -106,7 +113,8 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should correctly validate legitimate consistency proofs across size extensions', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_7.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
         ledger.appendLeaf('TX_001');
@@ -131,29 +139,24 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should validate batch operations matching multi-inclusion structural invariants', () => {
-        const storage = new MemoryStorage();
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_8.immr');
+        storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
-        // Appending 4 leaves produces a single perfect subtree with a root peak at storage index 6
-        ledger.appendLeaf('TX_BATCH_01'); // Storage index 0
-        ledger.appendLeaf('TX_BATCH_02'); // Storage index 1
-        ledger.appendLeaf('TX_BATCH_03'); // Storage index 3
-        ledger.appendLeaf('TX_BATCH_04'); // Storage index 4
+        ledger.appendLeaf('TX_BATCH_01'); 
+        ledger.appendLeaf('TX_BATCH_02'); 
+        ledger.appendLeaf('TX_BATCH_03'); 
+        ledger.appendLeaf('TX_BATCH_04'); 
 
         const masterRoot = ledger.getMasterRoot();
         const peakHashes = ledger.getPeakHashes();
 
-        // Target two sibling leaves that share a known parent node inside the tree topology
         const monitoredLeaves = [
             { index: 0, value: 'TX_BATCH_01' },
             { index: 1, value: 'TX_BATCH_02' }
         ];
 
-        // Retrieve the proof for leaf 0 to extract the path siblings needed to climb the remaining tree levels
         const subProof = ledger.generateInclusionProof(0, 'TX_BATCH_01');
-        
-        // Since indices 0 and 1 pair perfectly at height 0, their parent hash is resolved locally.
-        // We supply the subsequent sibling hashes from the proof path to satisfy the higher levels.
         const requiredProofHashes = subProof.siblings.slice(1);
 
         const isValidBatch = MerkleProofEngine.verifyMultiInclusion(
@@ -164,5 +167,20 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
         );
 
         assert.strictEqual(isValidBatch, true);
+    });
+
+    test('should successfully trace and resolve correct master root commitments across historical sizes', () => {
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_9.immr');
+        storage.clearDatabase();
+        const ledger = new MerkleMountainRange(storage);
+
+        ledger.appendLeaf('BLOCK_DATA_01');
+        const initialRootSnapshot = ledger.getMasterRoot();
+
+        ledger.appendLeaf('BLOCK_DATA_02');
+        ledger.appendLeaf('BLOCK_DATA_03');
+
+        const lookupRoot = ledger.getMasterRootAtSize(1);
+        assert.strictEqual(lookupRoot, initialRootSnapshot);
     });
 });
