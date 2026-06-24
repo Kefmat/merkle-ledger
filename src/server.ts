@@ -285,10 +285,19 @@ export class LedgerServer {
                 return;
             }
 
+            // Route: Fetch Operational Statistics Diagnostic Metadata
+            if (path === '/stats' && req.method === 'GET') {
+                this.writeJsonResponse(res, 200, {
+                    leafCount: this.ledger.getLeafCount(),
+                    masterRoot: this.ledger.getMasterRoot(),
+                    activePeaksCount: this.ledger.getPeakHashes().length
+                });
+                return;
+            }
+
             // Catch-all fallthrough fallback boundary
             this.writeJsonResponse(res, 404, { error: 'Requested network orchestration endpoint is unallocated.' });
         } catch (globalInternalError) {
-            // Trap low-level execution errors to return a 500 response instead of crashing the process
             const msg = globalInternalError instanceof Error ? globalInternalError.message : 'Fatal unhandled engine panic.';
             this.writeJsonResponse(res, 500, { error: 'Internal Server Error', details: msg });
         }
