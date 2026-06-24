@@ -1,39 +1,78 @@
-import { writeFileSync, readFileSync, existsSync, openSync, closeSync } from 'fs';
-import { join } from 'path';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 
 /**
  * DiskStorage provides an append-only, non-volatile storage implementation 
  * that preserves the immutable invariants of the ledger across service restarts.
  */
 export class DiskStorage {
-    private readonly filePath: string;
+    private readonly baseDirectory: string;
+    private readonly ledgerFileName: string;
+    private readonly indexFileName: string;
+    private readonly maxBytesPerSegment: number = 5 * 1024 * 1024; // 5MB default chunk cap limit
+    
+    private currentSegmentIndex: number = 0;
     private memoryCache: Map<number, string> = new Map();
+    private leafToStorageMap: Map<number, number> = new Map();
 
     /**
      * Instantiates the persistent storage engine using a specific target filepath.
-     * @param directory The directory path where the binary ledger file will reside.
-     * @param filename The name of the file used to dump raw ledger index nodes.
+     * @param directory The directory path where the binary ledger files will reside.
+     * @param filename The base name of the file used to dump raw ledger index nodes.
      */
-    constructor(directory: string, filename: string = 'ledger.immr') {
-        this.filePath = join(directory, filename);
-        this.initializeStorageFile();
+    constructor(directory: string, filename: string = 'ledger') {
+        this.baseDirectory = directory;
+        this.ledgerFileName = `${filename}.immr`;
+        this.indexFileName = `${filename}.idx`;
+        this.ensureDirectoryExists();
+        this.initializeStorageSystem();
+    }
+
+    /**
+     * Asserts target file directories are present in the host system layout.
+     */
+    private ensureDirectoryExists(): void {
+        if (!existsSync(this.baseDirectory)) {
+            mkdirSync(this.baseDirectory, { recursive: true });
+        }
     }
 
     /**
      * Asserts structural existence of the system ledger file and hydrates local memory cache registers.
      */
-    private initializeStorageFile(): void {
-        if (!existsSync(this.filePath)) {
-            writeFileSync(this.filePath, JSON.stringify({}), { encoding: 'utf8' });
-            return;
+    private initializeStorageSystem(): void {
+        const dataPath = join(this.baseDirectory, this.ledgerFileName);
+        const indexPath = join(this.baseDirectory, this.indexFileName);
+
+        // Bootstrap empty storage maps if files do not exist yet
+        if (!existsSync(dataPath)) {
+            writeFileSync(dataPath, JSON.stringify({ '0': {} }), { encoding: 'utf8' });
+        }
+        if (!existsSync(indexPath)) {
+            writeFileSync(indexPath, JSON.stringify({}), { encoding: 'utf8' });
         }
 
         try {
-            const rawContent = readFileSync(this.filePath, { encoding: 'utf8' });
-            const records: Record<string, string> = JSON.parse(rawContent || '{}');
+            // Rehydrate the primary data node block segments
+            const rawDataContent = readFileSync(dataPath, { encoding: 'utf8' });
+            const records: Record<string, Record<string, string>> = JSON.parse(rawDataContent || '{"0":{}}');
             
-            for (const [key, value] of Object.entries(records)) {
-                this.memoryCache.set(parseInt(key, 10), value);
+            // Locate our highest active chunk rotation segment
+            const segments = Object.keys(records).map(Number).sort((a, b) => b - a);
+            this.currentSegmentIndex = segments[0] ?? 0;
+
+            for (const [segmentId, segmentNodes] of Object.entries(records)) {
+                for (const [nodeIdx, hashValue] of Object.entries(segmentNodes)) {
+                    this.memoryCache.set(parseInt(nodeIdx, 10), hashValue);
+                }
+            }
+
+            // Instantly rehydrate index structures using the specialized .idx companion file
+            const rawIndexContent = readFileSync(indexPath, { encoding: 'utf8' });
+            const indices: Record<string, number> = JSON.parse(rawIndexContent || '{}');
+            
+            for (const [leafIdx, storageIdx] of Object.entries(indices)) {
+                this.leafToStorageMap.set(parseInt(leafIdx, 10), storageIdx);
             }
         } catch (error) {
             throw new Error(`Storage restoration exception: Ledger database file is corrupted or unreadable. ${error}`);
@@ -51,16 +90,71 @@ export class DiskStorage {
             throw new Error(`Persistence invariant violation: Storage index ${storageIndex} is already populated and immutable.`);
         }
 
-        // Update the operational RAM cache register
         this.memoryCache.set(storageIndex, hash);
+        this.flushDataToDisk();
+    }
 
-        // Commit serialized states synchronously to disk to assure execution durability
-        const flatObject: Record<number, string> = {};
-        for (const [key, value] of this.memoryCache.entries()) {
-            flatObject[key] = value;
+    /**
+     * Registers a permanent mapping reference associating a sequential leaf index with a tree storage index.
+     * @param leafIndex The chronological tracking index of the target leaf.
+     * @param storageIndex The absolute storage array position of the target leaf.
+     */
+    public writeLeafIndexMapping(leafIndex: number, storageIndex: number): void {
+        this.leafToStorageMap.set(leafIndex, storageIndex);
+        
+        const indexPath = join(this.baseDirectory, this.indexFileName);
+        const flatIndexObject: Record<number, number> = {};
+        for (const [key, value] of this.leafToStorageMap.entries()) {
+            flatIndexObject[key] = value;
         }
 
-        writeFileSync(this.filePath, JSON.stringify(flatObject, null, 2), { encoding: 'utf8' });
+        writeFileSync(indexPath, JSON.stringify(flatIndexObject, null, 2), { encoding: 'utf8' });
+    }
+
+    /**
+     * Commits memory states to the correct active transaction logging block on disk.
+     */
+    private flushDataToDisk(): void {
+        const dataPath = join(this.baseDirectory, this.ledgerFileName);
+        
+        let existingRecords: Record<string, Record<string, string>> = { '0': {} };
+        if (existsSync(dataPath)) {
+            try {
+                existingRecords = JSON.parse(readFileSync(dataPath, { encoding: 'utf8' }));
+            } catch {
+                // Keep default structure if parsing fails
+            }
+        }
+
+        // Initialize active segment partition space if needed
+        if (!existingRecords[this.currentSegmentIndex]) {
+            existingRecords[this.currentSegmentIndex] = {};
+        }
+
+        // Map cached states completely to historical records
+        for (const [storageIdx, hashValue] of this.memoryCache.entries()) {
+            let placed = false;
+            for (const segmentId of Object.keys(existingRecords)) {
+                if (existingRecords[segmentId][storageIdx] !== undefined) {
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                existingRecords[this.currentSegmentIndex][storageIdx] = hashValue;
+            }
+        }
+
+        const serializedData = JSON.stringify(existingRecords, null, 2);
+        
+        // Evaluate active segment volume capacity size to trigger dynamic block log rotation
+        if (serializedData.length > this.maxBytesPerSegment) {
+            this.currentSegmentIndex++;
+            existingRecords[this.currentSegmentIndex] = {};
+            writeFileSync(dataPath, JSON.stringify(existingRecords, null, 2), { encoding: 'utf8' });
+        } else {
+            writeFileSync(dataPath, serializedData, { encoding: 'utf8' });
+        }
     }
 
     /**
@@ -73,10 +167,24 @@ export class DiskStorage {
     }
 
     /**
+     * Returns the active map collection correlating sequential leaves directly to tree positions.
+     */
+    public getHydratedIndexMap(): Map<number, number> {
+        return this.leafToStorageMap;
+    }
+
+    /**
      * Purges disk file logs and wipes internal memory tables completely during environment resets.
      */
     public clearDatabase(): void {
         this.memoryCache.clear();
-        writeFileSync(this.filePath, JSON.stringify({}), { encoding: 'utf8' });
+        this.leafToStorageMap.clear();
+        this.currentSegmentIndex = 0;
+        
+        const dataPath = join(this.baseDirectory, this.ledgerFileName);
+        const indexPath = join(this.baseDirectory, this.indexFileName);
+        
+        writeFileSync(dataPath, JSON.stringify({ '0': {} }), { encoding: 'utf8' });
+        writeFileSync(indexPath, JSON.stringify({}), { encoding: 'utf8' });
     }
 }
