@@ -1,5 +1,5 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 
 /**
  * DiskStorage provides an append-only, non-volatile storage implementation 
@@ -44,7 +44,6 @@ export class DiskStorage {
         const dataPath = join(this.baseDirectory, this.ledgerFileName);
         const indexPath = join(this.baseDirectory, this.indexFileName);
 
-        // Bootstrap empty storage maps if files do not exist yet
         if (!existsSync(dataPath)) {
             writeFileSync(dataPath, JSON.stringify({ '0': {} }), { encoding: 'utf8' });
         }
@@ -53,11 +52,9 @@ export class DiskStorage {
         }
 
         try {
-            // Rehydrate the primary data node block segments
             const rawDataContent = readFileSync(dataPath, { encoding: 'utf8' });
             const records: Record<string, Record<string, string>> = JSON.parse(rawDataContent || '{"0":{}}');
             
-            // Locate our highest active chunk rotation segment
             const segments = Object.keys(records).map(Number).sort((a, b) => b - a);
             this.currentSegmentIndex = segments[0] ?? 0;
 
@@ -67,7 +64,6 @@ export class DiskStorage {
                 }
             }
 
-            // Instantly rehydrate index structures using the specialized .idx companion file
             const rawIndexContent = readFileSync(indexPath, { encoding: 'utf8' });
             const indices: Record<string, number> = JSON.parse(rawIndexContent || '{}');
             
@@ -122,16 +118,14 @@ export class DiskStorage {
             try {
                 existingRecords = JSON.parse(readFileSync(dataPath, { encoding: 'utf8' }));
             } catch {
-                // Keep default structure if parsing fails
+                // Ignore fallback blocks
             }
         }
 
-        // Initialize active segment partition space if needed
         if (!existingRecords[this.currentSegmentIndex]) {
             existingRecords[this.currentSegmentIndex] = {};
         }
 
-        // Map cached states completely to historical records
         for (const [storageIdx, hashValue] of this.memoryCache.entries()) {
             let placed = false;
             for (const segmentId of Object.keys(existingRecords)) {
@@ -147,7 +141,6 @@ export class DiskStorage {
 
         const serializedData = JSON.stringify(existingRecords, null, 2);
         
-        // Evaluate active segment volume capacity size to trigger dynamic block log rotation
         if (serializedData.length > this.maxBytesPerSegment) {
             this.currentSegmentIndex++;
             existingRecords[this.currentSegmentIndex] = {};
