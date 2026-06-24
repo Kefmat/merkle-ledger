@@ -23,7 +23,7 @@ export class MerkleMountainRange {
     private readonly storage: DiskStorage;
     private peaks: PeakMarker[] = [];
     private nextStorageIndex: number = 0;
-    private readonly leafToStorageMap: Map<number, number> = new Map();
+    private readonly leafToStorageMap: Map<number, number>;
     private leafCount: number = 0;
 
     /**
@@ -32,33 +32,34 @@ export class MerkleMountainRange {
      */
     constructor(storage: DiskStorage) {
         this.storage = storage;
+        this.leafToStorageMap = this.storage.getHydratedIndexMap();
         this.hydrateStateFromStorage();
     }
 
     /**
-     * Loops through sequential data nodes found within disk logs to restore tree parameters.
+     * Uses the loaded index table metrics to instantly restore tree variables on startup.
      */
     private hydrateStateFromStorage(): void {
-        let leafIterationCounter = 0;
-        let storageIterationIndex = 0;
+        this.leafCount = this.leafToStorageMap.size;
+        
+        let highestStorageIndex = -1;
+        for (const storageIdx of this.leafToStorageMap.values()) {
+            if (storageIdx > highestStorageIndex) {
+                highestStorageIndex = storageIdx;
+            }
+        }
 
+        // Climb sequential upper parents matching post-order rules to calculate nextStorageIndex
+        let currentScanIndex = highestStorageIndex + 1;
         while (true) {
-            const hash = this.storage.readNode(storageIterationIndex);
+            const hash = this.storage.readNode(currentScanIndex);
             if (!hash) {
                 break;
             }
-
-            const currentHeight = MathUtilities.getNodeHeight(storageIterationIndex);
-            if (currentHeight === 0) {
-                this.leafToStorageMap.set(leafIterationCounter, storageIterationIndex);
-                leafIterationCounter++;
-            }
-
-            storageIterationIndex++;
+            currentScanIndex++;
         }
 
-        this.nextStorageIndex = storageIterationIndex;
-        this.leafCount = leafIterationCounter;
+        this.nextStorageIndex = this.leafCount === 0 ? 0 : currentScanIndex;
         this.rebuildActivePeaksCache();
     }
 
@@ -71,7 +72,6 @@ export class MerkleMountainRange {
             return;
         }
 
-        // Simulate topological processing up to our current leaf volume boundary
         for (let i = 0; i < this.leafCount; i++) {
             const storageIndex = this.leafToStorageMap.get(i)!;
             const hash = this.storage.readNode(storageIndex)!;
@@ -85,7 +85,7 @@ export class MerkleMountainRange {
             let trackIdx = storageIndex;
             while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
                 const leftPeak = this.peaks.pop()!;
-                trackIdx++; // Navigate directly to parent storage slot
+                trackIdx++; 
                 const parentHash = this.storage.readNode(trackIdx)!;
 
                 newPeak = {
@@ -111,7 +111,7 @@ export class MerkleMountainRange {
             const assignedLeafIndex = this.leafCount;
             const assignedStorageIndex = this.nextStorageIndex;
 
-            this.leafToStorageMap.set(assignedLeafIndex, assignedStorageIndex);
+            this.storage.writeLeafIndexMapping(assignedLeafIndex, assignedStorageIndex);
             this.storage.writeNode(assignedStorageIndex, currentHash);
             
             let newPeak: PeakMarker = {
@@ -171,12 +171,11 @@ export class MerkleMountainRange {
                 const siblingHash = this.storage.readNode(siblingIndex);
                 
                 if (!siblingHash) {
-                    break; // Sibling is unallocated, indicating we hit a peak root boundary
+                    break; 
                 }
 
                 siblingsCollection.push(siblingHash);
                 
-                // Determine parent index coordinate sequentially under post-order rules
                 if (siblingIndex > currentStorageIndex) {
                     currentStorageIndex = siblingIndex + 1;
                 } else {
@@ -211,7 +210,6 @@ export class MerkleMountainRange {
                 throw new Error(`Consistency proof calculation exception: Baseline bounds size ${oldSize} is invalid.`);
             }
 
-            // Reconstruct what the peaks array looked like when leafCount matched oldSize
             let virtualPeaks: Array<{ height: number; hash: string }> = [];
             
             for (let i = 0; i < oldSize; i++) {
@@ -270,7 +268,7 @@ export class MerkleMountainRange {
     }
 
     /**
-     * Reconstructs and returns what the master root evaluated to at a specific historical point in time.
+     * Reconstructs what the master root evaluated to at a specific historical point in time.
      * @param targetSize The historical leaf count snapshot marker to audit.
      * @returns The master root hash commitment at that exact point.
      */
