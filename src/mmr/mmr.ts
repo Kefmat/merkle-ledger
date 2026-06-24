@@ -49,7 +49,6 @@ export class MerkleMountainRange {
             }
         }
 
-        // Climb sequential upper parents matching post-order rules to calculate nextStorageIndex
         let currentScanIndex = highestStorageIndex + 1;
         while (true) {
             const hash = this.storage.readNode(currentScanIndex);
@@ -122,7 +121,6 @@ export class MerkleMountainRange {
             this.nextStorageIndex++;
             this.leafCount++;
 
-            // Cascading merge loop: combine left and right peaks of equal height
             while (this.peaks.length > 0 && this.peaks[this.peaks.length - 1].height === newPeak.height) {
                 const leftPeak = this.peaks.pop()!;
                 const parentHash = this.calculateHash(leftPeak.hash + newPeak.hash);
@@ -141,6 +139,35 @@ export class MerkleMountainRange {
             this.peaks.push(newPeak);
             return assignedLeafIndex;
         });
+    }
+
+    /**
+     * Audits the internal consistency of the entire database tree structure.
+     * Recalculates and validates parent nodes from their respective children.
+     * @returns True if the entire layout matches cryptographic expectations perfectly.
+     */
+    public auditLedgerIntegrity(): boolean {
+        for (let idx = 0; idx < this.nextStorageIndex; idx++) {
+            const currentHeight = MathUtilities.getNodeHeight(idx);
+            if (currentHeight > 0) {
+                // Under post-order rules, children precede their parent directly
+                const rightChildIdx = idx - 1;
+                const leftChildIdx = MathUtilities.getSiblingIndex(rightChildIdx, currentHeight - 1);
+                
+                const parentHash = this.storage.readNode(idx);
+                const leftHash = this.storage.readNode(leftChildIdx);
+                const rightHash = this.storage.readNode(rightChildIdx);
+
+                if (!parentHash || !leftHash || !rightHash) {
+                    return false;
+                }
+
+                if (this.calculateHash(leftHash + rightHash) !== parentHash) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -165,7 +192,6 @@ export class MerkleMountainRange {
             let currentStorageIndex = initialStorageIndex;
             let currentHeight = MathUtilities.getNodeHeight(currentStorageIndex);
 
-            // Climb the tree path until reaching an isolated mountain peak
             while (currentStorageIndex < this.nextStorageIndex) {
                 const siblingIndex = MathUtilities.getSiblingIndex(currentStorageIndex, currentHeight);
                 const siblingHash = this.storage.readNode(siblingIndex);
