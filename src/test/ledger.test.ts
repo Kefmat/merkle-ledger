@@ -8,7 +8,7 @@ import { MerkleProofEngine } from '../proofs/engine.js';
 describe('Merkle Mountain Range Cryptographic Suite', () => {
 
     test('should maintain immutability and reject index modification overwrites', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_1.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_1');
         storage.clearDatabase();
         storage.writeNode(10, '8a3c61b1');
         
@@ -18,7 +18,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should safely throw an error when generating inclusion proofs on an empty ledger', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_2.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_2');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
         
@@ -28,7 +28,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should safely throw an error when generating consistency proofs on an empty ledger', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_3.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_3');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
         
@@ -38,7 +38,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should accurately verify authentic inclusion proofs for arbitrary entries', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_4.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_4');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -63,7 +63,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should reject inclusion matching if the data payload has been altered', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_5.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_5');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -86,7 +86,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should reject verification claims if a sibling path token is corrupted', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_6.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_6');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -113,7 +113,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should correctly validate legitimate consistency proofs across size extensions', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_7.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_7');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -139,7 +139,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should validate batch operations matching multi-inclusion structural invariants', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_8.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_8');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -170,7 +170,7 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
     });
 
     test('should successfully trace and resolve correct master root commitments across historical sizes', () => {
-        const storage = new DiskStorage(tmpdir(), 'test_ledger_9.immr');
+        const storage = new DiskStorage(tmpdir(), 'test_ledger_9');
         storage.clearDatabase();
         const ledger = new MerkleMountainRange(storage);
 
@@ -182,5 +182,23 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
 
         const lookupRoot = ledger.getMasterRootAtSize(1);
         assert.strictEqual(lookupRoot, initialRootSnapshot);
+    });
+
+    test('should accurately rehydrate state variables and maintain master roots over process simulation reboots', () => {
+        const sharedFileName = 'test_reboot_ledger';
+        const storageContextInit = new DiskStorage(tmpdir(), sharedFileName);
+        storageContextInit.clearDatabase();
+        
+        const ledgerInit = new MerkleMountainRange(storageContextInit);
+        ledgerInit.appendLeaf('REBOOT_DATA_TOKEN_1');
+        ledgerInit.appendLeaf('REBOOT_DATA_TOKEN_2');
+        const targetMasterRootBeforeReboot = ledgerInit.getMasterRoot();
+
+        // Simulate service shutdown and system reboot sequence by constructing an independent storage bridge
+        const storageContextReboot = new DiskStorage(tmpdir(), sharedFileName);
+        const ledgerReboot = new MerkleMountainRange(storageContextReboot);
+
+        assert.strictEqual(ledgerReboot.getLeafCount(), 2);
+        assert.strictEqual(ledgerReboot.getMasterRoot(), targetMasterRootBeforeReboot);
     });
 });
