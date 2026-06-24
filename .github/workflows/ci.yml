@@ -21,7 +21,7 @@ jobs:
       - name: Checkout Repository Codebase
         uses: actions/checkout@v4
 
-      - name: Setup Node.js Environment (v${{ matrix.node-version }})
+      - name: Setup Node.js Environment
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
