@@ -3,16 +3,10 @@ import { DiskStorage } from './storage/diskStorage.js';
 import { MerkleMountainRange } from './mmr/mmr.js';
 import { MerkleProofEngine } from './proofs/engine.js';
 
-/**
- * Inbound transaction payload schema contract for append operations.
- */
 interface AppendRequestPayload {
     value: string;
 }
 
-/**
- * Inbound proof verification payload schema contract for processing stateless assertions.
- */
 interface VerifyRequestPayload {
     type: 'inclusion' | 'consistency' | 'batch-inclusion';
     rootHash?: string;
@@ -27,44 +21,30 @@ interface VerifyRequestPayload {
     leaves?: Array<{ index: number; value: string }>;
 }
 
-/**
- * Orchestrates a native non-blocking HTTP networking cluster to process operational 
- * transaction records and retrieve deterministic proof frames.
- */
 export class LedgerServer {
     private readonly server;
     private readonly ledger: MerkleMountainRange;
+    private executionQueueChain: Promise<unknown> = Promise.resolve();
 
-    /**
-     * Initializes the microservice abstraction using bounded cryptographic engines.
-     * @param storage The persistent disk storage engine backing the tracking metrics.
-     */
     constructor(storage: DiskStorage) {
         this.ledger = new MerkleMountainRange(storage);
         this.server = createServer((req: IncomingMessage, res: ServerResponse) => this.handleNetworkRequest(req, res));
     }
 
-    /**
-     * Binds the server loop to a designated operational networking interface.
-     * @param port The decimal TCP port identifier to allocate.
-     * @param callback Execution handler fired upon successful interface assignment.
-     */
     public listen(port: number, callback: () => void): void {
         this.server.listen(port, '127.0.0.1', callback);
     }
 
-    /**
-     * Closes the underlying networking interface cleanly during graceful teardowns.
-     */
     public close(): void {
         this.server.close();
     }
 
-    /**
-     * Runtime validation type guard ensuring an unvalidated inbound object adheres strictly 
-     * to the AppendRequestPayload structure contract definitions.
-     * @param obj The candidate object parsed from the network buffer.
-     */
+    private enqueueTransactionTask<T>(taskHandler: () => Promise<T>): Promise<T> {
+        const sequentialPromise = this.executionQueueChain.then(() => taskHandler());
+        this.executionQueueChain = sequentialPromise.catch(() => {});
+        return sequentialPromise;
+    }
+
     private isValidAppendPayload(obj: unknown): obj is AppendRequestPayload {
         return (
             typeof obj === 'object' &&
@@ -75,11 +55,6 @@ export class LedgerServer {
         );
     }
 
-    /**
-     * Runtime validation type guard ensuring an unvalidated inbound object adheres strictly
-     * to the VerifyRequestPayload structure contract definitions.
-     * @param obj The candidate object parsed from the network buffer.
-     */
     private isValidVerifyPayload(obj: unknown): obj is VerifyRequestPayload {
         if (typeof obj !== 'object' || obj === null) {
             return false;
@@ -126,18 +101,11 @@ export class LedgerServer {
         return false;
     }
 
-    /**
-     * Routes incoming telemetry buffers dynamically based on request path attributes.
-     * Wrapped completely within an error-trapping boundary to catch unexpected exceptions.
-     * @param req The active inbound connection context wrapper.
-     * @param res The outbound network response serialization boundary.
-     */
     private handleNetworkRequest(req: IncomingMessage, res: ServerResponse): void {
         try {
             const urlInstance = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
             const path = urlInstance.pathname;
 
-            // Route: Append Entry Log
             if (path === '/append' && req.method === 'POST') {
                 let bufferAccumulator = '';
                 req.on('data', (chunk: Buffer) => {
@@ -145,40 +113,41 @@ export class LedgerServer {
                 });
 
                 req.on('end', () => {
-                    try {
-                        const payload: unknown = JSON.parse(bufferAccumulator);
-                        if (!this.isValidAppendPayload(payload)) {
-                            this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Must contain a non-empty string "value" property.' });
-                            return;
+                    this.enqueueTransactionTask(async () => {
+                        try {
+                            const payload: unknown = JSON.parse(bufferAccumulator);
+                            if (!this.isValidAppendPayload(payload)) {
+                                this.writeJsonResponse(res, 400, { error: 'Payload validation failed.' });
+                                return;
+                            }
+
+                            const allocatedLeafIndex = this.ledger.appendLeaf(payload.value);
+                            const systemMasterRoot = this.ledger.getMasterRoot();
+
+                            this.writeJsonResponse(res, 201, {
+                                leafIndex: allocatedLeafIndex,
+                                masterRoot: systemMasterRoot
+                            });
+                        } catch {
+                            this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata.' });
                         }
-
-                        const allocatedLeafIndex = this.ledger.appendLeaf(payload.value);
-                        const systemMasterRoot = this.ledger.getMasterRoot();
-
-                        this.writeJsonResponse(res, 201, {
-                            leafIndex: allocatedLeafIndex,
-                            masterRoot: systemMasterRoot
-                        });
-                    } catch {
-                        this.writeJsonResponse(res, 400, { error: 'Malformed serialization framing metadata. Request body is not valid JSON.' });
-                    }
+                    });
                 });
                 return;
             }
 
-            // Route: Compile Inclusion Proof
             if (path === '/proof' && req.method === 'GET') {
                 const indexParameter = urlInstance.searchParams.get('leafIndex');
                 const dataParameter = urlInstance.searchParams.get('value');
 
                 if (indexParameter === null || dataParameter === null || dataParameter.trim().length === 0) {
-                    this.writeJsonResponse(res, 400, { error: 'Query bounds must define absolute "leafIndex" and explicit "value" fields.' });
+                    this.writeJsonResponse(res, 400, { error: 'Query bounds must define parameters fields.' });
                     return;
                 }
 
                 const evaluatedIndex = parseInt(indexParameter, 10);
                 if (isNaN(evaluatedIndex) || evaluatedIndex < 0) {
-                    this.writeJsonResponse(res, 400, { error: 'Query bound "leafIndex" must be a non-negative integers configuration parameter.' });
+                    this.writeJsonResponse(res, 400, { error: 'Query bound must be a non-negative integer parameter.' });
                     return;
                 }
 
@@ -197,17 +166,16 @@ export class LedgerServer {
                 return;
             }
 
-            // Route: Compile Consistency Proof
             if (path === '/consistency' && req.method === 'GET') {
                 const oldSizeParameter = urlInstance.searchParams.get('oldSize');
                 if (!oldSizeParameter) {
-                    this.writeJsonResponse(res, 400, { error: 'Query parameter must specify a valid historical oldSize boundary.' });
+                    this.writeJsonResponse(res, 400, { error: 'Query parameter must specify historical size.' });
                     return;
                 }
 
                 const parsedOldSize = parseInt(oldSizeParameter, 10);
                 if (isNaN(parsedOldSize) || parsedOldSize <= 0) {
-                    this.writeJsonResponse(res, 400, { error: 'Query bound "oldSize" must be an integer baseline configuration greater than zero.' });
+                    this.writeJsonResponse(res, 400, { error: 'Query bound oldSize must be greater than zero.' });
                     return;
                 }
 
@@ -228,7 +196,6 @@ export class LedgerServer {
                 return;
             }
 
-            // Route: Verify Structural Proofs (Inclusion, Consistency, or Batch Inclusion)
             if (path === '/verify' && req.method === 'POST') {
                 let bufferAccumulator = '';
                 req.on('data', (chunk: Buffer) => {
@@ -239,7 +206,7 @@ export class LedgerServer {
                     try {
                         const payload: unknown = JSON.parse(bufferAccumulator);
                         if (!this.isValidVerifyPayload(payload)) {
-                            this.writeJsonResponse(res, 400, { error: 'Payload validation failed. Structural keys are corrupted or mismatched for type.' });
+                            this.writeJsonResponse(res, 400, { error: 'Payload validation failed.' });
                             return;
                         }
 
@@ -276,16 +243,13 @@ export class LedgerServer {
                             this.writeJsonResponse(res, 200, { valid: isValid });
                             return;
                         }
-
-                        this.writeJsonResponse(res, 400, { error: 'Invalid or unallocated verification type context.' });
                     } catch {
-                        this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization framing metadata. Request body is not valid JSON.' });
+                        this.writeJsonResponse(res, 400, { error: 'Malformed verification serialization body.' });
                     }
                 });
                 return;
             }
 
-            // Route: Fetch Operational Statistics Diagnostic Metadata
             if (path === '/stats' && req.method === 'GET') {
                 this.writeJsonResponse(res, 200, {
                     leafCount: this.ledger.getLeafCount(),
@@ -295,20 +259,19 @@ export class LedgerServer {
                 return;
             }
 
-            // Catch-all fallthrough fallback boundary
-            this.writeJsonResponse(res, 404, { error: 'Requested network orchestration endpoint is unallocated.' });
+            if (path === '/audit' && req.method === 'GET') {
+                const structuralHealthMatches = this.ledger.auditLedgerIntegrity();
+                this.writeJsonResponse(res, 200, { integral: structuralHealthMatches });
+                return;
+            }
+
+            this.writeJsonResponse(res, 404, { error: 'Requested endpoint is unallocated.' });
         } catch (globalInternalError) {
-            const msg = globalInternalError instanceof Error ? globalInternalError.message : 'Fatal unhandled engine panic.';
+            const msg = globalInternalError instanceof Error ? globalInternalError.message : 'Fatal engine panic.';
             this.writeJsonResponse(res, 500, { error: 'Internal Server Error', details: msg });
         }
     }
 
-    /**
-     * Formats network tracking metrics cleanly as application/json headers.
-     * @param res The outbound network response serialization boundary.
-     * @param status The transactional HTTP code assignment to inject.
-     * @param body The serialized payload instance to submit down the socket.
-     */
     private writeJsonResponse(res: ServerResponse, status: number, body: Record<string, unknown>): void {
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(body));
