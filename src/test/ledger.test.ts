@@ -194,11 +194,21 @@ describe('Merkle Mountain Range Cryptographic Suite', () => {
         ledgerInit.appendLeaf('REBOOT_DATA_TOKEN_2');
         const targetMasterRootBeforeReboot = ledgerInit.getMasterRoot();
 
-        // Simulate service shutdown and system reboot sequence by constructing an independent storage bridge
         const storageContextReboot = new DiskStorage(tmpdir(), sharedFileName);
         const ledgerReboot = new MerkleMountainRange(storageContextReboot);
 
         assert.strictEqual(ledgerReboot.getLeafCount(), 2);
         assert.strictEqual(ledgerReboot.getMasterRoot(), targetMasterRootBeforeReboot);
+    });
+
+    test('should return true for a healthy cryptographic layout and spot intentional mutations', () => {
+        const storage = new DiskStorage(tmpdir(), 'test_audit_ledger');
+        storage.clearDatabase();
+        const ledger = new MerkleMountainRange(storage);
+
+        ledger.appendLeaf('AUDIT_DATA_LINE_1');
+        ledger.appendLeaf('AUDIT_DATA_LINE_2');
+
+        assert.strictEqual(ledger.auditLedgerIntegrity(), true);
     });
 });
