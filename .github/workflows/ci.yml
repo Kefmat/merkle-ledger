@@ -15,7 +15,6 @@ jobs:
 
     strategy:
       matrix:
-        # Dropped deprecated EOL Node 18/20. Target Active LTS and Current Node releases.
         node-version: [22.x, 24.x, 26.x]
 
     steps:
