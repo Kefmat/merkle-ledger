@@ -1,5 +1,6 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
+import { rmSync, existsSync } from 'fs';
 import { MerkleMountainRange } from '../mmr/mmr.js';
 import { DiskStorage } from '../storage/diskStorage.js';
 import { CryptographicProofVerifier } from '../crypto/verifier.js';
@@ -9,9 +10,17 @@ import { CryptographicProofVerifier } from '../crypto/verifier.js';
  * tracking, proof production, and independent client validation layers.
  */
 describe('Merkle Ledger Core Integration Suite', () => {
+    const testDirectoryPath = './data/test_env';
+
+    after(() => {
+        // Enforce an aggressive post-run file vacuum step
+        if (existsSync(testDirectoryPath)) {
+            rmSync(testDirectoryPath, { recursive: true, force: true });
+        }
+    });
+
     it('should complete a multi-step append, proof extraction, and out-of-band validation flow', () => {
-        // Instantiate real storage context to satisfy constructor requirements
-        const mockStorageInstance = new DiskStorage('./data/test_env', 'integration_manifest');
+        const mockStorageInstance = new DiskStorage(testDirectoryPath, 'integration_manifest');
         const testEngineInstance = new MerkleMountainRange(mockStorageInstance);
         
         const txA = 'tx_commitment_payload_alpha';
@@ -20,7 +29,6 @@ describe('Merkle Ledger Core Integration Suite', () => {
         const trackingIndexA = testEngineInstance.appendLeaf(txA);
         testEngineInstance.appendLeaf(txB);
         
-        // Provide both tracking index and raw value parameters to clear TS2554
         const proofBundle = testEngineInstance.generateInclusionProof(trackingIndexA, txA);
         const engineActivePeaks = testEngineInstance.getPeakHashes();
 
