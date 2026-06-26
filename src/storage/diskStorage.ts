@@ -33,6 +33,7 @@ export class DiskStorage {
      */
     private ensureDirectoryExists(): void {
         if (!existsSync(this.baseDirectory)) {
+            // Apply recursive mask to safely create multi-tiered nested path structures
             mkdirSync(this.baseDirectory, { recursive: true });
         }
     }
